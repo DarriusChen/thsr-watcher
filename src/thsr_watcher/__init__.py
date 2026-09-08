@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from thsr-watcher!")
+"""Personal-use THSR ticket availability watcher."""

@@ -1,7 +1,7 @@
 [project]
 name = "thsr-watcher"
 version = "0.1.0"
-description = "Add your description here"
+description = "A personal-use THSR ticket availability watcher"
 readme = "README.md"
 authors = [
     { name = "DarriusChen", email = "darriuschen0926@gmail.com" }
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-thsr-watcher = "thsr_watcher:main"
+thsr-watcher = "thsr_watcher.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
@@ -23,5 +23,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
