@@ -1,0 +1,591 @@
+{
+  "success": true,
+  "data": {
+    "DepartureTable": {
+      "Title": {
+        "StartStationName": "台北",
+        "EndStationName": "台中",
+        "TitleSplit1": "2026/09/15(二) 17:00",
+        "TitleSplit2": "2026/09/15(二)"
+      },
+      "TrainItem": [
+        {
+          "TrainNumber": "0803",
+          "DepartureTime": "06:26",
+          "DestinationTime": "07:30",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0203",
+          "DepartureTime": "06:30",
+          "DestinationTime": "07:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0603",
+          "DepartureTime": "06:51",
+          "DestinationTime": "07:51",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0805",
+          "DepartureTime": "07:11",
+          "DestinationTime": "08:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0109",
+          "DepartureTime": "07:31",
+          "DestinationTime": "08:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "1505",
+          "DepartureTime": "07:36",
+          "DestinationTime": "08:42",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0609",
+          "DepartureTime": "07:46",
+          "DestinationTime": "08:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0205",
+          "DepartureTime": "07:51",
+          "DestinationTime": "08:38",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "1305",
+          "DepartureTime": "08:01",
+          "DestinationTime": "08:52",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0809",
+          "DepartureTime": "08:11",
+          "DestinationTime": "09:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0613",
+          "DepartureTime": "08:21",
+          "DestinationTime": "09:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0207",
+          "DepartureTime": "08:31",
+          "DestinationTime": "09:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0615",
+          "DepartureTime": "08:46",
+          "DestinationTime": "09:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "1307",
+          "DepartureTime": "09:01",
+          "DestinationTime": "09:52",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0813",
+          "DepartureTime": "09:11",
+          "DestinationTime": "10:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0619",
+          "DepartureTime": "09:21",
+          "DestinationTime": "10:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0117",
+          "DepartureTime": "09:31",
+          "DestinationTime": "10:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0621",
+          "DepartureTime": "09:46",
+          "DestinationTime": "10:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0817",
+          "DepartureTime": "10:11",
+          "DestinationTime": "11:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0625",
+          "DepartureTime": "10:21",
+          "DestinationTime": "11:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0121",
+          "DepartureTime": "10:31",
+          "DestinationTime": "11:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0627",
+          "DepartureTime": "10:46",
+          "DestinationTime": "11:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0821",
+          "DepartureTime": "11:11",
+          "DestinationTime": "12:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0125",
+          "DepartureTime": "11:31",
+          "DestinationTime": "12:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0633",
+          "DepartureTime": "11:46",
+          "DestinationTime": "12:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0825",
+          "DepartureTime": "12:11",
+          "DestinationTime": "13:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0637",
+          "DepartureTime": "12:21",
+          "DestinationTime": "13:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0129",
+          "DepartureTime": "12:31",
+          "DestinationTime": "13:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0639",
+          "DepartureTime": "12:46",
+          "DestinationTime": "13:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0829",
+          "DepartureTime": "13:11",
+          "DestinationTime": "14:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0643",
+          "DepartureTime": "13:21",
+          "DestinationTime": "14:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0133",
+          "DepartureTime": "13:31",
+          "DestinationTime": "14:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0645",
+          "DepartureTime": "13:46",
+          "DestinationTime": "14:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0833",
+          "DepartureTime": "14:11",
+          "DestinationTime": "15:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0649",
+          "DepartureTime": "14:21",
+          "DestinationTime": "15:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0137",
+          "DepartureTime": "14:31",
+          "DestinationTime": "15:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0651",
+          "DepartureTime": "14:46",
+          "DestinationTime": "15:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0837",
+          "DepartureTime": "15:11",
+          "DestinationTime": "16:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0655",
+          "DepartureTime": "15:21",
+          "DestinationTime": "16:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0141",
+          "DepartureTime": "15:31",
+          "DestinationTime": "16:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0657",
+          "DepartureTime": "15:46",
+          "DestinationTime": "16:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "1321",
+          "DepartureTime": "16:01",
+          "DestinationTime": "16:52",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0841",
+          "DepartureTime": "16:11",
+          "DestinationTime": "17:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0661",
+          "DepartureTime": "16:21",
+          "DestinationTime": "17:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0145",
+          "DepartureTime": "16:31",
+          "DestinationTime": "17:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0663",
+          "DepartureTime": "16:46",
+          "DestinationTime": "17:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "1241",
+          "DepartureTime": "16:51",
+          "DestinationTime": "17:38",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0845",
+          "DepartureTime": "17:11",
+          "DestinationTime": "18:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0667",
+          "DepartureTime": "17:21",
+          "DestinationTime": "18:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0149",
+          "DepartureTime": "17:31",
+          "DestinationTime": "18:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0669",
+          "DepartureTime": "17:46",
+          "DestinationTime": "18:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "1547",
+          "DepartureTime": "17:56",
+          "DestinationTime": "18:56",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0849",
+          "DepartureTime": "18:11",
+          "DestinationTime": "19:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0673",
+          "DepartureTime": "18:21",
+          "DestinationTime": "19:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0153",
+          "DepartureTime": "18:31",
+          "DestinationTime": "19:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "1549",
+          "DepartureTime": "18:36",
+          "DestinationTime": "19:42",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0675",
+          "DepartureTime": "18:46",
+          "DestinationTime": "19:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0249",
+          "DepartureTime": "18:51",
+          "DestinationTime": "19:38",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0853",
+          "DepartureTime": "19:11",
+          "DestinationTime": "20:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0679",
+          "DepartureTime": "19:21",
+          "DestinationTime": "20:23",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0157",
+          "DepartureTime": "19:31",
+          "DestinationTime": "20:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0681",
+          "DepartureTime": "19:46",
+          "DestinationTime": "20:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0857",
+          "DepartureTime": "20:11",
+          "DestinationTime": "21:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0161",
+          "DepartureTime": "20:31",
+          "DestinationTime": "21:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0687",
+          "DepartureTime": "20:46",
+          "DestinationTime": "21:46",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0861",
+          "DepartureTime": "21:11",
+          "DestinationTime": "22:15",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0165",
+          "DepartureTime": "21:31",
+          "DestinationTime": "22:18",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0693",
+          "DepartureTime": "21:41",
+          "DestinationTime": "22:41",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0333",
+          "DepartureTime": "21:56",
+          "DestinationTime": "22:47",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0295",
+          "DepartureTime": "22:16",
+          "DestinationTime": "23:05",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0565",
+          "DepartureTime": "22:26",
+          "DestinationTime": "23:29",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        },
+        {
+          "TrainNumber": "0567",
+          "DepartureTime": "23:00",
+          "DestinationTime": "23:59",
+          "RunDate": "2026/09/15",
+          "IsCrossNight": false,
+          "DepartureDate": null
+        }
+      ]
+    }
+  }
+}
