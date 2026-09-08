@@ -15,5 +15,12 @@
 - Every implementation task must finish by running relevant tests.
 - Summarize modified files and verification results when done.
 
-The current scope is the project foundation only. Do not add THSR browser
-automation until a later vertical slice explicitly requires it.
+The current scope is VS-01: search the official public THSR timetable by
+origin, destination, travel date, and an inclusive same-day departure-time
+window. Browser automation is permitted only for this public timetable search.
+Keep input validation and timetable filtering independent of browser automation.
+
+Seat availability checks, polling, notifications, persistence, and reservation
+assistance are out of scope until a later vertical slice explicitly requires
+them. Do not access the reservation system in this slice. Automatic payment
+remains prohibited.
