@@ -7,20 +7,24 @@
 - Prefer typed domain models, using Pydantic for models and configuration.
 - Use uv for Python dependencies and commands, Typer for the CLI, Playwright
   for browser automation, and pytest for tests.
-- Never bypass CAPTCHA or anti-bot controls. Stop automation and hand off to
-  the user when a challenge occurs.
+- Within VS-02, explicit opt-in browser compatibility experiments may adjust
+  Playwright automation indicators (such as `navigator.webdriver`) or use a
+  stealth plugin to reduce automation fingerprint exposure. Keep these changes
+  isolated in the browser layer, disabled by default, and covered by offline
+  tests when implemented. This permission does not establish that automation
+  detection caused a failure or guarantee that these adjustments will help.
+- Preserve the external human CAPTCHA handoff.
+  Stop automation on additional access challenges, explicit blocks, or HTTP 403/429
+  responses; do not automatically retry with different fingerprints, proxies, or
+  identities, or use stealth to continue past a block.
 - Use conservative polling and respect server errors and rate limits. Do not
   implement aggressive polling or mechanisms intended to evade limits.
-- Never implement automatic payment.
-- Every implementation task must finish by running relevant tests.
-- Summarize modified files and verification results when done.
 
-The current scope is VS-01: search the official public THSR timetable by
-origin, destination, travel date, and an inclusive same-day departure-time
-window. Browser automation is permitted only for this public timetable search.
-Keep input validation and timetable filtering independent of browser automation.
+VS-02 may open the official reservation search form, fill search criteria,
+capture the CAPTCHA element, accept one human answer in the same live session,
+submit once, and parse currently bookable trains. Stop at train results: never
+select a train, enter Pickup Information, handle personal data, create a
+reservation, or pay.
 
-Seat availability checks, polling, notifications, persistence, and reservation
-assistance are out of scope until a later vertical slice explicitly requires
-them. Do not access the reservation system in this slice. Automatic payment
-remains prohibited.
+Polling/watchers, notifications, messaging integrations, persistence, and
+reservation completion remain out of scope. Regular tests must be offline.
