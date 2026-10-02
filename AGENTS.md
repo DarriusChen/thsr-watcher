@@ -22,7 +22,10 @@
 
 VS-02 may open the official reservation search form, fill search criteria,
 capture the CAPTCHA element, accept one human answer in the same live session,
-submit once, and parse currently bookable trains. Stop at train results: never
+submit once per answer, and parse currently bookable trains. Only after THSR
+explicitly rejects the CAPTCHA may the same live session recapture a new
+CAPTCHA and accept another human answer, up to 3 answers per session in total;
+any other outcome ends the session. Stop at train results: never
 select a train, enter Pickup Information, handle personal data, create a
 reservation, or pay.
 

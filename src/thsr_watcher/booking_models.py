@@ -47,10 +47,14 @@ class BookingSearchResult(BaseModel):
     status: BookingSearchStatus
     trains: list[Train] = Field(default_factory=list)
     message: str = ""
+    # Nonzero only while the same live session awaits another human answer.
+    captcha_attempts_remaining: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def no_trains_on_failure(self) -> Self:
         if self.status != BookingSearchStatus.SUCCESS and self.trains:
             raise ValueError("Failed searches cannot contain bookable trains")
+        if self.captcha_attempts_remaining and self.status != BookingSearchStatus.CAPTCHA_REJECTED:
+            raise ValueError("Only a rejected CAPTCHA can leave attempts remaining")
         self.trains.sort(key=lambda train: (train.departure, train.number))
         return self

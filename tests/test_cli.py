@@ -90,6 +90,30 @@ def test_booking_cli_handoff_and_cleanup(
     )
 
 
+def test_booking_cli_prompts_again_only_while_attempts_remain(monkeypatch, tmp_path):
+    from thsr_watcher.booking_models import BookingSearchResult, BookingSearchStatus, BookingSessionStarted
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+
+    manager = MagicMock()
+    manager.__enter__.return_value = manager
+    now = datetime.now(timezone.utc)
+    manager.start_search.return_value = BookingSessionStarted(session_id="session", captcha_path=tmp_path / "captcha.png", started_at=now, expires_at=now)
+    manager.submit_captcha.side_effect = [
+        BookingSearchResult(status=BookingSearchStatus.CAPTCHA_REJECTED, captcha_attempts_remaining=2),
+        BookingSearchResult(status=BookingSearchStatus.CAPTCHA_REJECTED, captcha_attempts_remaining=1),
+        BookingSearchResult(status=BookingSearchStatus.CAPTCHA_REJECTED),
+    ]
+    monkeypatch.setattr(cli, "BookingSessionManager", Mock(return_value=manager))
+    result = runner.invoke(cli.app, BOOKING_ARGS, input="one\ntwo\nthree\nfour\n")
+    assert result.exit_code == 1
+    assert "2 attempts remaining" in result.output and "1 attempts remaining" in result.output
+    assert [call.args for call in manager.submit_captcha.call_args_list] == [
+        ("session", "one"), ("session", "two"), ("session", "three"),
+    ]
+    manager.__exit__.assert_called_once()
+
+
 def test_booking_cli_validation_and_help(monkeypatch):
     factory = Mock()
     monkeypatch.setattr(cli, "BookingSessionManager", factory)

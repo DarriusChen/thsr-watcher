@@ -152,10 +152,80 @@ def test_dialog_captcha_rejection_after_submission(browser_setup):
         handler = next(call.args[1] for call in page.on.call_args_list if call.args[0] == "dialog")
         dialog = Mock(message="驗證碼輸入錯誤")
         locators["#SubmitButton"].click.side_effect = lambda **kwargs: handler(dialog)
-        page.wait_for_function.side_effect = RuntimeError("timeout")
-        assert manager.submit_captcha(started.session_id, "answer").status == Status.CAPTCHA_REJECTED
+
+        def scan_times_out(script, **kwargs):
+            if script == adapter._SCAN_JS:
+                raise RuntimeError("timeout")
+
+        page.wait_for_function.side_effect = scan_times_out
+        result = manager.submit_captcha(started.session_id, "answer")
+        assert result.status == Status.CAPTCHA_REJECTED and result.captcha_attempts_remaining == 2
         dialog.dismiss.assert_called_once()
         locators["#SubmitButton"].click.assert_called_once()
+
+
+def test_rejection_retry_recaptures_and_ignores_stale_outcome(browser_setup):
+    _, _, context, page, locators, request = browser_setup
+    feedback = locators[adapter.FEEDBACK]
+    captcha_input = locators['[name="homeCaptcha:securityCode"]']
+    page.evaluate.return_value = 1000.0
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        feedback.all_inner_texts.return_value = ["驗證碼輸入錯誤"]
+        first = manager.submit_captcha(started.session_id, "wrong")
+        assert first.status == Status.CAPTCHA_REJECTED and first.captcha_attempts_remaining == 2
+        context.close.assert_not_called()
+        assert locators["#BookingS1Form_homeCaptcha_passCode"].screenshot.call_count == 2
+        assert locators['[name="selectStartStation"]'].select_option.call_count == 2
+        # The previous rejection is still on the page until the retry submits.
+        locators["body"].inner_text.return_value = "驗證碼輸入錯誤"
+        locators["#SubmitButton"].click.side_effect = lambda **kwargs: locators["body"].inner_text.configure_mock(
+            return_value="查無符合條件之車次")
+        feedback.all_inner_texts.return_value = ["查無符合條件之車次"]
+        locators[adapter.RESULT_TABLE].locator.return_value.filter.return_value.count.return_value = 0
+        second = manager.submit_captcha(started.session_id, "right")
+    assert second.status == Status.SUCCESS
+    assert [call.args[0] for call in captcha_input.fill.call_args_list] == ["WRONG", "RIGHT"]
+    assert locators["#SubmitButton"].click.call_count == 2
+    scan_args = [call.kwargs["arg"]["staleOrigin"] for call in page.wait_for_function.call_args_list
+                 if call.args[0] == adapter._SCAN_JS]
+    assert scan_args == [None, 1000.0]
+    context.close.assert_called_once()
+
+
+def test_retry_timeout_ignores_stale_rejection_on_unchanged_document(browser_setup):
+    _, _, _, page, locators, request = browser_setup
+    page.evaluate.return_value = 1000.0
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        locators[adapter.FEEDBACK].all_inner_texts.return_value = ["驗證碼輸入錯誤"]
+        assert manager.submit_captcha(started.session_id, "wrong").status == Status.CAPTCHA_REJECTED
+        locators["body"].inner_text.return_value = "驗證碼輸入錯誤"
+
+        def scan_times_out(script, **kwargs):
+            if script == adapter._SCAN_JS:
+                raise RuntimeError("timeout")
+
+        page.wait_for_function.side_effect = scan_times_out
+        result = manager.submit_captcha(started.session_id, "again")
+    assert result.status == Status.UNKNOWN_ERROR
+    assert "waiting for train results" in result.message
+
+
+def test_browser_submits_once_per_captured_captcha(browser_setup, tmp_path):
+    _, _, _, _, locators, request = browser_setup
+    browser = adapter.PlaywrightBookingBrowser()
+    try:
+        browser.start(request, tmp_path / "captcha.png")
+        locators[adapter.FEEDBACK].all_inner_texts.return_value = ["伺服器錯誤"]
+        assert browser.submit("one").status == Status.UNKNOWN_ERROR
+        with pytest.raises(BookingError, match="no unanswered CAPTCHA"):
+            browser.submit("two")
+        with pytest.raises(BookingError, match="No rejected CAPTCHA"):
+            browser.refresh_captcha(tmp_path / "captcha.png")
+    finally:
+        browser.close()
+    locators["#SubmitButton"].click.assert_called_once()
 
 
 def test_failed_data_request_cannot_be_empty_success(browser_setup):

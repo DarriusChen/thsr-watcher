@@ -70,7 +70,7 @@ def booking_search(
         ),
     ] = False,
 ) -> None:
-    """Capture CAPTCHA, accept one human answer, show bookable trains, and stop."""
+    """Capture CAPTCHA, accept a human answer, show bookable trains, and stop."""
     try:
         request = BookingSearchRequest(
             origin=origin, destination=destination, travel_date=travel_date,
@@ -91,6 +91,14 @@ def booking_search(
             typer.echo("Keep this process running; Ctrl-C cancels and removes the image.")
             answer = typer.prompt("Enter CAPTCHA", hide_input=True)
             result = manager.submit_captcha(session.session_id, answer)
+            while result.captcha_attempts_remaining:
+                typer.echo(f"{result.status.value}: {result.message}")
+                typer.echo(
+                    f"New CAPTCHA image: {session.captcha_path} "
+                    f"({result.captcha_attempts_remaining} attempts remaining)"
+                )
+                answer = typer.prompt("Enter CAPTCHA", hide_input=True)
+                result = manager.submit_captcha(session.session_id, answer)
     except BookingError as exc:
         typer.echo(f"Booking search failed: {exc}", err=True)
         raise typer.Exit(1) from exc

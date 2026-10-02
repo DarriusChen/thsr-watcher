@@ -1,4 +1,5 @@
-"""One official reservation form submission, ending on the train-results page.
+"""One official reservation form submission per human CAPTCHA answer, ending on
+the train-results page.
 
 Selectors are provisional until verified locally against THSR. Unknown markup
 fails closed: it never means no availability and never triggers another search.
@@ -30,7 +31,8 @@ FEEDBACK = ".feedbackPanel, .feedbackPanelERROR, [role=alert], .alert-danger"
 # Reads train radios only; never clicks them. Attribute values are returned as
 # data, attribute names only so an unexpected markup change can be reported.
 _SCAN_JS = """
-({table, radio, feedback, patterns}) => {
+({table, radio, feedback, patterns, staleOrigin}) => {
+    if (staleOrigin !== null && performance.timeOrigin === staleOrigin) return null;
     const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
     const trains = Array.from(document.querySelectorAll(radio))
         .filter(el => !el.disabled && visible(el))
@@ -48,7 +50,7 @@ _SCAN_JS = """
     return {trains, hasTableRadio, hasFeedback, hasPattern};
 }
 """
-REJECTED = r"驗證碼.{0,16}(錯誤|不正確|有誤)|驗證碼輸入錯誤|invalid captcha|incorrect verification code"
+REJECTED = r"(驗證碼|檢測碼).{0,16}(錯誤|不正確|有誤)|invalid captcha|incorrect verification code"
 EXPIRED = r"(連線|工作階段|操作|網頁).{0,16}(逾時|過期|超時)|session.{0,16}(expired|timeout|timed out)"
 EMPTY = r"查無符合條件之車次|查無符合條件的車次|無符合條件之車次|no trains available"
 
@@ -192,7 +194,9 @@ class PlaywrightBookingBrowser:
         self._resources = ExitStack()
         self._page: Page | None = None
         self._request: BookingSearchRequest | None = None
-        self._submitted = False
+        self._awaiting_answer = False
+        self._rejected = False
+        self._attempts = 0
         self._request_errors: list[str] = []
         self._dialogs: list[str] = []
 
@@ -266,6 +270,21 @@ class PlaywrightBookingBrowser:
             consent = page.get_by_role("button", name="我同意", exact=True)
             if consent.is_visible():
                 consent.click()
+        self._fill_criteria(request)
+        self._capture_captcha(captcha_path)
+
+    def refresh_captcha(self, captcha_path: Path) -> None:
+        """After an explicit CAPTCHA rejection, recapture on the same live page."""
+        if self._page is None or self._awaiting_answer or not self._rejected:
+            raise BookingError("No rejected CAPTCHA to replace in this session")
+        self._rejected = False
+        self._check_access()
+        assert self._request is not None
+        self._fill_criteria(self._request)
+        self._capture_captcha(captcha_path)
+
+    def _fill_criteria(self, request: BookingSearchRequest) -> None:
+        page = self._page
         page.locator('[name="selectStartStation"]').select_option(label=request.origin)
         page.locator('[name="selectDestinationStation"]').select_option(label=request.destination)
         time_mode = page.locator("#bookingMethod_0")
@@ -300,20 +319,28 @@ class PlaywrightBookingBrowser:
         # Floor to a supported slot; apply the exact lower bound to displayed results.
         time_select.select_option(value=max(choices)[1])
         page.locator('select[name="ticketPanel:rows:0:ticketAmount"]').select_option(label=str(request.adult_passengers))
+
+    def _capture_captcha(self, captcha_path: Path) -> None:
+        page = self._page
         captcha = page.locator("#BookingS1Form_homeCaptcha_passCode")
         captcha.wait_for(state="visible")
         page.wait_for_function("() => { const img = document.getElementById('BookingS1Form_homeCaptcha_passCode'); return img && img.complete && img.naturalWidth > 0; }", timeout=TIMEOUT_MS)
         self._check_access()
         captcha.screenshot(path=str(captcha_path))
         captcha_path.chmod(0o600)
+        self._awaiting_answer = True
 
     def submit(self, captcha_text: str) -> BookingSearchResult:
-        if self._page is None or self._submitted:
-            raise BookingError("Session is closed or its one submission was already used")
-        self._submitted = True
+        """Submit once per captured CAPTCHA; a new answer needs refresh_captcha()."""
+        if self._page is None or not self._awaiting_answer:
+            raise BookingError("Session is closed or has no unanswered CAPTCHA")
+        self._awaiting_answer = False
+        self._dialogs.clear()
         self._stage = "checking session before submission"
         try:
-            return self._submit_once(captcha_text)
+            result = self._submit_once(captcha_text)
+            self._rejected = result.status == Status.CAPTCHA_REJECTED
+            return result
         except BookingError as exc:
             raise BookingError(
                 f"{exc} Stage: {self._stage}. {self._page_diagnostics()}"
@@ -420,10 +447,19 @@ class PlaywrightBookingBrowser:
 
     def _submit_once(self, captcha_text: str) -> BookingSearchResult:
         page = self._page
+        retry = self._attempts > 0
         self._check_access()
         preflight = feedback_result(page.locator("body").inner_text())
-        if preflight and preflight.status != Status.SUCCESS:
+        # On a retry the previous rejection is still displayed; it says nothing
+        # about the new answer.
+        if preflight and preflight.status != Status.SUCCESS and not (
+            retry and preflight.status == Status.CAPTCHA_REJECTED
+        ):
             return preflight
+        # Until the document changes, any outcome on screen belongs to the
+        # previous attempt.
+        stale_origin = page.evaluate("() => performance.timeOrigin") if retry else None
+        self._attempts += 1
         self._stage = "filling CAPTCHA"
         page.locator('[name="homeCaptcha:securityCode"]').fill(captcha_text)
         # This selector belongs only to the search form. No result-page control
@@ -435,12 +471,15 @@ class PlaywrightBookingBrowser:
             found = page.wait_for_function(
                 _SCAN_JS,
                 arg={"table": RESULT_TABLE, "radio": TRAIN_RADIO, "feedback": FEEDBACK,
-                     "patterns": f"{REJECTED}|{EXPIRED}|{EMPTY}"},
+                     "patterns": f"{REJECTED}|{EXPIRED}|{EMPTY}", "staleOrigin": stale_origin},
                 timeout=TIMEOUT_MS,
             ).json_value()
         except Exception:
             self._check_access()
-            error = feedback_result("\n".join(self._dialogs) + "\n" + page.locator("body").inner_text())
+            text = "\n".join(self._dialogs)
+            if stale_origin is None or page.evaluate("() => performance.timeOrigin") != stale_origin:
+                text += "\n" + page.locator("body").inner_text()
+            error = feedback_result(text)
             if error and error.status != Status.SUCCESS:
                 return error
             raise

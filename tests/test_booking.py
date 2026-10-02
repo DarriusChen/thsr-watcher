@@ -21,6 +21,8 @@ class FakeBrowser:
         self.closed = False
         self.answers = []
         self.result = BookingSearchResult(status=Status.SUCCESS)
+        self.refreshes = 0
+        self.refresh_error = None
 
     def start(self, request, captcha_path):
         self.request = request
@@ -30,9 +32,17 @@ class FakeBrowser:
     def submit(self, answer):
         assert not self.closed
         self.answers.append(answer)
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        result = self.result.pop(0) if isinstance(self.result, list) else self.result
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def refresh_captcha(self, captcha_path):
+        assert not self.closed and captcha_path == self.path
+        self.refreshes += 1
+        if self.refresh_error:
+            raise self.refresh_error
+        captcha_path.write_bytes(b"new challenge")
 
     def close(self):
         self.closed = True
@@ -73,15 +83,63 @@ def test_same_live_session_unique_ids_and_one_attempt(booking_request):
     assert not first.captcha_path.parent.exists()
 
 
-@pytest.mark.parametrize("status", [Status.CAPTCHA_REJECTED, Status.SESSION_EXPIRED, Status.UNKNOWN_ERROR])
+@pytest.mark.parametrize("status", [Status.SESSION_EXPIRED, Status.UNKNOWN_ERROR])
 def test_submission_outcomes_close_session(booking_request, status):
     browser = FakeBrowser()
     browser.result = BookingSearchResult(status=status)
     with BookingSessionManager(browser_factory=lambda: browser) as manager:
         started = manager.start_search(booking_request)
         assert manager.submit_captcha(started.session_id, "answer").status == status
-        assert browser.closed
+        assert browser.closed and browser.refreshes == 0
         assert not started.captcha_path.exists()
+
+
+def test_rejected_captcha_recaptures_in_same_session(booking_request):
+    browser = FakeBrowser()
+    browser.result = [
+        BookingSearchResult(status=Status.CAPTCHA_REJECTED, message="THSR reported: 驗證碼輸入錯誤"),
+        BookingSearchResult(status=Status.SUCCESS),
+    ]
+    with BookingSessionManager(browser_factory=lambda: browser) as manager:
+        started = manager.start_search(booking_request)
+        first = manager.submit_captcha(started.session_id, "wrong")
+        assert first.status == Status.CAPTCHA_REJECTED
+        assert first.captcha_attempts_remaining == 2
+        assert not browser.closed and browser.refreshes == 1
+        assert started.captcha_path.read_bytes() == b"new challenge"
+        assert manager.submit_captcha(started.session_id, "right").status == Status.SUCCESS
+        assert browser.answers == ["WRONG", "RIGHT"]
+        assert browser.closed and not started.captcha_path.exists()
+
+
+def test_captcha_attempts_are_capped(booking_request):
+    browser = FakeBrowser()
+    browser.result = BookingSearchResult(status=Status.CAPTCHA_REJECTED)
+    with BookingSessionManager(browser_factory=lambda: browser, max_captcha_attempts=3) as manager:
+        started = manager.start_search(booking_request)
+        remaining = [manager.submit_captcha(started.session_id, "x").captcha_attempts_remaining for _ in range(3)]
+        assert remaining == [2, 1, 0]
+        assert browser.refreshes == 2 and browser.closed
+        assert manager.submit_captcha(started.session_id, "x").status == Status.SESSION_EXPIRED
+        assert len(browser.answers) == 3
+
+
+def test_recapture_failure_closes_session(booking_request):
+    browser = FakeBrowser()
+    browser.result = BookingSearchResult(status=Status.CAPTCHA_REJECTED, message="rejected.")
+    browser.refresh_error = BookingError("captcha image missing")
+    with BookingSessionManager(browser_factory=lambda: browser) as manager:
+        started = manager.start_search(booking_request)
+        result = manager.submit_captcha(started.session_id, "x")
+        assert result.status == Status.UNKNOWN_ERROR
+        assert result.captcha_attempts_remaining == 0
+        assert "captcha image missing" in result.message
+        assert browser.closed and not started.captcha_path.exists()
+
+
+def test_only_rejection_can_leave_attempts():
+    with pytest.raises(ValidationError):
+        BookingSearchResult(status=Status.SUCCESS, captcha_attempts_remaining=1)
 
 
 def test_expiry_and_unknown_do_not_submit(booking_request):
@@ -159,10 +217,15 @@ def test_empty_answer_closes_without_submission(booking_request):
 
 def test_parse_fixture_and_fail_closed():
     payload = json.loads((Path(__file__).parent / "fixtures/booking_results.json").read_text())
-    trains = parse_train_rows(payload["headers"], payload["rows"])
-    assert [t.number for t in trains] == ["0845", "0149", "0673"]
-    assert trains[0].departure.strftime("%H:%M") == "17:11"
-    for headers, rows in [(payload["headers"], []), (["changed"], payload["rows"]), (payload["headers"], [["broken"]])]:
+    trains = parse_train_radios(payload["radios"])
+    assert [(t.number, t.departure.strftime("%H:%M"), t.arrival.strftime("%H:%M")) for t in trains] == [
+        ("0845", "17:11", "18:15"), ("0149", "17:31", "18:18"), ("0673", "18:46", "19:46"),
+    ]
+    with pytest.raises(BookingError):
+        parse_train_radios([payload["radios"][0] | {"code": ""}])
+    table = payload["table"]
+    assert parse_train_rows(table["headers"], table["rows"]) == trains
+    for headers, rows in [(table["headers"], []), (["changed"], table["rows"]), (table["headers"], [["broken"]])]:
         with pytest.raises(BookingError):
             parse_train_rows(headers, rows)
 
@@ -189,6 +252,7 @@ def test_train_radio_without_number_or_two_times_is_unknown(radio):
 
 def test_feedback_requires_explicit_outcome():
     assert feedback_result("驗證碼輸入錯誤").status == Status.CAPTCHA_REJECTED
+    assert feedback_result("檢測碼輸入錯誤，請確認後重新輸入").status == Status.CAPTCHA_REJECTED
     assert feedback_result("連線逾時，請重新操作").status == Status.SESSION_EXPIRED
     assert feedback_result("查無符合條件之車次").status == Status.SUCCESS
     assert feedback_result("請輸入驗證碼") is None

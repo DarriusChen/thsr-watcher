@@ -106,8 +106,11 @@ uv run thsr-watcher booking-search \
 
 Chromium is headed by default (`--headless` is optional). Open the printed PNG
 path externally, read the CAPTCHA yourself, and enter its text at the terminal
-prompt. Keep that terminal process running. One answer makes one submission;
-the command prints the currently presented bookable trains and closes. It does
+prompt. Keep that terminal process running. One answer makes one submission.
+If THSR explicitly rejects the CAPTCHA, the same page is refilled, a new
+CAPTCHA image overwrites the same PNG path, and you are prompted again (up to 3
+answers in total). Otherwise the command prints the currently presented
+bookable trains and closes. It does
 not click a train or continue to Pickup Information. Ctrl-C/EOF cancels and
 cleans up. Failed searches exit 1; invalid inputs exit 2. No separate
 `booking-start`/`booking-captcha` shell commands exist because a new process
@@ -150,6 +153,9 @@ with BookingSessionManager() as manager:
     # Keep this manager alive; all calls must use the same process and thread.
     answer = input(f"Read {session.captcha_path} externally; enter CAPTCHA: ")
     result = manager.submit_captcha(session.session_id, answer)
+    while result.captcha_attempts_remaining:
+        answer = input(f"Rejected; read the new {session.captcha_path}: ")
+        result = manager.submit_captcha(session.session_id, answer)
 ```
 
 `booking_models.py` reuses VS-01's station, date/time validation, and `Train`
@@ -167,7 +173,12 @@ returns a PNG path under the OS temporary directory, in a unique private
 `thsr-watcher-<session-id>-...` directory. The PNG is restricted to its owner.
 No OCR, image interpretation, CAPTCHA endpoint calls, or automated answer
 retrieval is implemented. `submit_captcha()` calls the same browser owner and
-fills the same page, then consumes/closes the session regardless of outcome.
+fills the same page, then consumes/closes the session, except after an
+explicit CAPTCHA rejection with answers remaining (`max_captcha_attempts`,
+default 3): then the criteria are refilled on the same page, a new CAPTCHA is
+captured to the same path, and the result has a nonzero
+`captcha_attempts_remaining`. The browser accepts exactly one submission per
+captured CAPTCHA.
 The browser, context, driver reference, and image directory are released on
 submission, cancellation, failed setup, explicit close, or manager exit.
 Abrupt process termination (for example SIGKILL) cannot guarantee cleanup.
@@ -193,7 +204,15 @@ Explicit CAPTCHA-error text maps to `CAPTCHA_REJECTED`; recognized timeout/sessi
 text maps to `SESSION_EXPIRED`. Unrecognized feedback, malformed tables, HTTP
 errors, additional access challenges, and browser/timeouts map to `UNKNOWN_ERROR`
 (or `BookingError` during setup), never empty availability. A rejected answer
-is not retried; the caller must explicitly start another session.
+is never resubmitted automatically; only a new human answer for a newly
+captured CAPTCHA is submitted. On such a retry, the rejection still displayed
+from the previous attempt is ignored, and outcomes count only after the
+document changes (`performance.timeOrigin`). Rejection is recognized for
+「驗證碼」 or 「檢測碼」 followed by 錯誤/不正確/有誤. The live rejection
+page, its wording, and whether THSR shows a new CAPTCHA after it have not been
+verified; if a retry cannot refill the form or capture a CAPTCHA, the session
+closes with `UNKNOWN_ERROR`. The local deadline still counts from the first
+capture.
 
 ### Live verification status
 
