@@ -59,8 +59,8 @@ class BookingSessionManager:
     ) -> None:
         if ttl <= timedelta(0):
             raise ValueError("Session TTL must be positive")
-        if max_captcha_attempts < 1:
-            raise ValueError("At least one CAPTCHA attempt is required")
+        if type(max_captcha_attempts) is not int or not 1 <= max_captcha_attempts <= 3:
+            raise ValueError("CAPTCHA attempts must be an integer from 1 to 3")
         if browser_factory is None:
             from thsr_watcher.booking_browser import PlaywrightBookingFactory
             browser_factory = PlaywrightBookingFactory(

@@ -112,16 +112,25 @@ def test_rejected_captcha_recaptures_in_same_session(booking_request):
         assert browser.closed and not started.captcha_path.exists()
 
 
-def test_captcha_attempts_are_capped(booking_request):
+@pytest.mark.parametrize("limit", [1, 2, 3])
+def test_captcha_attempts_are_capped(booking_request, limit):
     browser = FakeBrowser()
     browser.result = BookingSearchResult(status=Status.CAPTCHA_REJECTED)
-    with BookingSessionManager(browser_factory=lambda: browser, max_captcha_attempts=3) as manager:
+    with BookingSessionManager(browser_factory=lambda: browser, max_captcha_attempts=limit) as manager:
         started = manager.start_search(booking_request)
-        remaining = [manager.submit_captcha(started.session_id, "x").captcha_attempts_remaining for _ in range(3)]
-        assert remaining == [2, 1, 0]
-        assert browser.refreshes == 2 and browser.closed
+        remaining = [manager.submit_captcha(started.session_id, "x").captcha_attempts_remaining for _ in range(limit)]
+        assert remaining == list(range(limit - 1, -1, -1))
+        assert browser.refreshes == limit - 1 and browser.closed
         assert manager.submit_captcha(started.session_id, "x").status == Status.SESSION_EXPIRED
-        assert len(browser.answers) == 3
+        assert len(browser.answers) == limit
+
+
+@pytest.mark.parametrize("limit", [0, -1, 4, 100, True, False, 1.0, 2.5, "3", None])
+def test_invalid_captcha_limit_is_rejected_before_browser_creation(limit):
+    factory = Mock()
+    with pytest.raises(ValueError, match="integer from 1 to 3"):
+        BookingSessionManager(browser_factory=factory, max_captcha_attempts=limit)
+    factory.assert_not_called()
 
 
 def test_recapture_failure_closes_session(booking_request):

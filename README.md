@@ -175,7 +175,7 @@ No OCR, image interpretation, CAPTCHA endpoint calls, or automated answer
 retrieval is implemented. `submit_captcha()` calls the same browser owner and
 fills the same page, then consumes/closes the session, except after an
 explicit CAPTCHA rejection with answers remaining (`max_captcha_attempts`,
-default 3): then the criteria are refilled on the same page, a new CAPTCHA is
+an integer from 1 to 3, default 3): then the criteria are refilled on the same page, a new CAPTCHA is
 captured to the same path, and the result has a nonzero
 `captcha_attempts_remaining`. The browser accepts exactly one submission per
 captured CAPTCHA.
