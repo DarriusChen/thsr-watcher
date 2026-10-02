@@ -45,7 +45,7 @@ _SCAN_JS = """
         }));
     const hasTableRadio = Array.from(document.querySelectorAll(table + ' input[type=radio]')).some(el => visible(el.closest('tr') || el));
     const hasFeedback = Array.from(document.querySelectorAll(feedback)).some(el => visible(el) && (el.innerText || '').trim());
-    const hasPattern = new RegExp(patterns, 'i').test(document.body.innerText || '');
+    const hasPattern = new RegExp(patterns, 'i').test((document.body && document.body.innerText) || '');
     if (!trains.length && !hasTableRadio && !hasFeedback && !hasPattern) return null;
     return {trains, hasTableRadio, hasFeedback, hasPattern};
 }
@@ -484,7 +484,9 @@ class PlaywrightBookingBrowser:
                 return error
             raise
         self._check_access()
-        feedback = "\n".join(self._dialogs + page.locator(FEEDBACK).all_inner_texts())
+        feedback = "\n".join(
+            self._dialogs + page.locator(FEEDBACK).filter(visible=True).all_inner_texts()
+        )
         result = feedback_result(feedback)
         if result and result.status != Status.SUCCESS:
             return result
@@ -495,12 +497,16 @@ class PlaywrightBookingBrowser:
             return body_result
         self._stage = "parsing train results"
         radios = found.get("trains") if isinstance(found, dict) else None
-        table = page.locator(RESULT_TABLE)
-        rows = table.locator("tr").filter(has=page.locator('input[type="radio"]:enabled'))
+        table = page.locator(RESULT_TABLE).filter(visible=True)
+        rows = table.locator("tr").filter(
+            visible=True, has=page.locator('input[type="radio"]:enabled'),
+        )
         if radios:
             trains = parse_train_radios(radios)
         elif rows.count():
-            headers = table.locator("tr").filter(has=page.locator("th")).first.locator("th, td").all_inner_texts()
+            headers = table.locator("tr").filter(
+                visible=True, has=page.locator("th"),
+            ).first.locator("th, td").all_inner_texts()
             data = [row.locator("td").all_inner_texts() for row in rows.all()]
             trains = parse_train_rows(headers, data)
         elif result or body_result:

@@ -39,6 +39,8 @@ def browser_setup(monkeypatch):
     challenge = 'iframe[src*="recaptcha"]:visible, iframe[src*="hcaptcha"]:visible, iframe[src*="challenges.cloudflare.com"]:visible'
     locators[challenge].count.return_value = 0
     locators[adapter.FEEDBACK].all_inner_texts.return_value = []
+    locators[adapter.FEEDBACK].filter.return_value = locators[adapter.FEEDBACK]
+    locators[adapter.RESULT_TABLE].filter.return_value = locators[adapter.RESULT_TABLE]
     request = BookingSearchRequest(origin="台北", destination="台中", travel_date="2026-09-15", after="17:10")
     return driver, browser, context, page, locators, request
 
@@ -345,6 +347,64 @@ def test_train_radios_are_parsed_without_clicking_them(browser_setup):
     assert result.status == Status.SUCCESS
     assert [(train.number, train.departure.strftime("%H:%M")) for train in result.trains] == [("0149", "17:31")]
     assert [key for key, value in locators.items() if value.click.called] == ["#SubmitButton"]
+
+
+@pytest.mark.parametrize("hidden_text", ["驗證碼輸入錯誤", "連線逾時", "伺服器錯誤"])
+@pytest.mark.parametrize("has_trains", [True, False])
+def test_hidden_feedback_does_not_override_visible_outcome(browser_setup, hidden_text, has_trains):
+    _, _, _, page, locators, request = browser_setup
+    feedback = locators[adapter.FEEDBACK]
+    feedback.all_inner_texts.return_value = [hidden_text]
+    visible_feedback = Mock()
+    visible_feedback.all_inner_texts.return_value = [] if has_trains else ["查無符合條件之車次"]
+    feedback.filter.side_effect = lambda **kwargs: visible_feedback if kwargs.get("visible") else feedback
+    page.wait_for_function.return_value.json_value.return_value = {"trains": [
+        {"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""},
+    ] if has_trains else []}
+    locators[adapter.RESULT_TABLE].locator.return_value.filter.return_value.count.return_value = 0
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        result = manager.submit_captcha(started.session_id, "answer")
+        assert not started.captcha_path.exists()
+    assert result.status == Status.SUCCESS
+    assert [train.number for train in result.trains] == (["0149"] if has_trains else [])
+    assert result.captcha_attempts_remaining == 0
+    assert locators["#BookingS1Form_homeCaptcha_passCode"].screenshot.call_count == 1
+
+
+def test_table_fallback_ignores_hidden_tables_rows_and_headings(browser_setup):
+    _, _, _, page, locators, request = browser_setup
+    page.wait_for_function.return_value.json_value.return_value = {"trains": []}
+    tables = locators[adapter.RESULT_TABLE]
+    visible_table = MagicMock()
+    tables.filter.side_effect = lambda **kwargs: visible_table if kwargs.get("visible") else tables
+    # An unfiltered table collection includes an obsolete hidden template.
+    tables.locator.return_value.filter.side_effect = AssertionError("Hidden table was read")
+    selectable_rows = MagicMock()
+    visible_row = Mock()
+    visible_row.locator.return_value.all_inner_texts.return_value = ["0149", "17:31", "18:18"]
+    hidden_row = Mock()
+    hidden_row.locator.return_value.all_inner_texts.return_value = ["0999", "18:00", "19:00"]
+    headings = MagicMock()
+
+    def filter_rows(**kwargs):
+        if kwargs["has"] is locators["th"]:
+            headings.first.locator.return_value.all_inner_texts.return_value = (
+                ["車次", "出發時間", "抵達時間"] if kwargs.get("visible") else ["obsolete"]
+            )
+            return headings
+        rows = [visible_row] if kwargs.get("visible") else [hidden_row, visible_row]
+        selectable_rows.count.return_value = len(rows)
+        selectable_rows.all.return_value = rows
+        return selectable_rows
+
+    visible_table.locator.return_value.filter.side_effect = filter_rows
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        result = manager.submit_captcha(started.session_id, "answer")
+    assert result.status == Status.SUCCESS
+    assert [train.number for train in result.trains] == ["0149"]
+    hidden_row.locator.assert_not_called()
 
 
 def test_train_radio_without_number_reports_attribute_names(browser_setup):
