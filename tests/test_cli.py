@@ -55,3 +55,56 @@ def test_invalid_inputs_do_not_launch_browser(monkeypatch, option, value, messag
 @pytest.mark.parametrize("args", [[], ["--help"], ["search", "--help"]])
 def test_help_and_entrypoint(args):
     assert runner.invoke(cli.app, args).exit_code == 0
+
+
+BOOKING_ARGS = ["booking-search", "--from", "台北", "--to", "台中", "--date", "2026-09-15", "--after", "17:00"]
+
+
+@pytest.mark.parametrize(("extra_args", "chrome", "compatibility"), [
+    ([], False, False),
+    (["--chrome"], True, False),
+    (["--compatibility"], False, True),
+])
+def test_booking_cli_handoff_and_cleanup(
+    monkeypatch, tmp_path, extra_args, chrome, compatibility,
+):
+    from thsr_watcher.booking_models import BookingSearchResult, BookingSearchStatus, BookingSessionStarted
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+
+    manager = MagicMock()
+    manager.__enter__.return_value = manager
+    now = datetime.now(timezone.utc)
+    manager.start_search.return_value = BookingSessionStarted(session_id="session", captcha_path=tmp_path / "captcha.png", started_at=now, expires_at=now)
+    manager.submit_captcha.return_value = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[Train(number="0149", departure="17:31", arrival="18:18")])
+    factory = Mock(return_value=manager)
+    monkeypatch.setattr(cli, "BookingSessionManager", factory)
+    result = runner.invoke(cli.app, BOOKING_ARGS + extra_args, input="human\n")
+    assert result.exit_code == 0, result.output
+    assert str(tmp_path / "captcha.png") in result.output
+    assert "0149" in result.output
+    manager.submit_captcha.assert_called_once_with("session", "human")
+    manager.__exit__.assert_called_once()
+    factory.assert_called_once_with(
+        headless=False, chrome=chrome, compatibility=compatibility,
+    )
+
+
+def test_booking_cli_validation_and_help(monkeypatch):
+    factory = Mock()
+    monkeypatch.setattr(cli, "BookingSessionManager", factory)
+    result = runner.invoke(cli.app, BOOKING_ARGS + ["--adults", "0"])
+    assert result.exit_code == 2
+    assert runner.invoke(cli.app, ["booking-search", "--help"]).exit_code == 0
+    factory.assert_not_called()
+
+
+def test_booking_cli_cancel_closes_manager(monkeypatch):
+    from unittest.mock import MagicMock
+    manager = MagicMock()
+    manager.__enter__.return_value = manager
+    monkeypatch.setattr(cli, "BookingSessionManager", Mock(return_value=manager))
+    result = runner.invoke(cli.app, BOOKING_ARGS, input="")
+    assert result.exit_code == 1
+    manager.submit_captcha.assert_not_called()
+    manager.__exit__.assert_called_once()
