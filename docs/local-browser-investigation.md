@@ -1,9 +1,18 @@
 # Local browser investigation — 2026-09-09
 
-VS-02 live verification remains blocked: the user observed successful manual
-searches in regular and Incognito Chrome, but both manual and automated searches
-in Playwright-launched Chrome failed with `net::ERR_EMPTY_RESPONSE` on the
-reservation form's POST. These observations do not establish anti-bot blocking.
+> Historical investigation, recorded on 2026-09-09–10. Statements below about
+> blocked or pending verification describe that stage of the investigation.
+> The complete CLI flow subsequently succeeded with `--compatibility` on
+> 2026-10-02; see the [verification record](verification.md). Use
+> [troubleshooting](troubleshooting.md) for current diagnostic instructions.
+> Network settings and proposed next steps below are historical observations,
+> not instructions to repeat those changes.
+
+On 2026-09-09, VS-02 live verification was still blocked: the user observed
+successful manual searches in regular and Incognito Chrome, but both manual and
+automated searches in Playwright-launched Chrome failed with
+`net::ERR_EMPTY_RESPONSE` on the reservation form's POST. These observations do
+not establish anti-bot blocking.
 
 ## Read-only local checks
 
