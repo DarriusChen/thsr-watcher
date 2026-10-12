@@ -1,91 +1,116 @@
 # THSR Watcher
 
-A personal-use THSR tool developed in small vertical slices. VS-01 searches the
-**official public timetable** for a route, date, and departure-time window.
-It does not check seat availability or enter the reservation system. Polling,
-notifications, persistence, reservations, and payment are not implemented.
+A personal-use command-line tool for searching Taiwan High Speed Rail trains:
 
-## Development
+- **Timetable search:** list scheduled trains within a departure-time window.
+- **Bookable train search:** query the official reservation form with a CAPTCHA
+  answered by a human, display currently presented bookable trains, and stop.
 
-Requires Python 3.13+ and uv:
+Timetable results do not indicate seat availability. Despite the project name,
+polling, notifications, persistence, reservation creation, and payment are not
+implemented.
+
+## Installation
+
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/). From the repository root:
 
 ```sh
 uv sync
 uv run playwright install chromium
 uv run thsr-watcher --help
-uv run thsr-watcher search --help
-uv run pytest
 ```
 
-## Search
+## Timetable search
+
+Replace `2026-10-23` in these examples with a valid travel date supported by THSR.
 
 ```sh
 uv run thsr-watcher search \
   --from 台北 \
   --to 台中 \
-  --date 2026-09-15 \
+  --date 2026-10-23 \
   --after 17:00 \
   --before 20:00
 ```
 
-Supported station names: 南港、台北、板橋、桃園、新竹、苗栗、台中、彰化、雲林、
-嘉義、台南、左營. Origin and destination must differ. Dates use `YYYY-MM-DD`
-and cannot precede today in Asia/Taipei. Times use `HH:MM` with no seconds or
-zone. Both endpoints are **inclusive departure times on the travel date**;
-`--after` must not exceed `--before`. Equal endpoints search an exact minute.
-Arrival may be later than `--before`.
+Both endpoints are inclusive departure times on the travel date. `--after` must
+not exceed `--before`; equal endpoints search an exact minute. Arrival may be
+later than `--before`. Overnight departure windows are not supported.
+Chromium runs headlessly by default; add `--headed` to show the browser.
 
-Chromium runs headlessly by default; add `--headed` to show the browser for
-debugging. No browser installation or network is required for the tests.
-Exit codes: 0 for a successful search (including no matches), 2 for invalid
-input, and 1 for retrieval/browser/response-format failures.
+## Bookable train search
 
-## Design and website boundary
+```sh
+uv run thsr-watcher booking-search \
+  --from 台北 \
+  --to 台中 \
+  --date 2026-10-23 \
+  --after 17:00 \
+  --adults 1
+```
 
-- `models.py`: Pydantic `SearchRequest` and `Train`, station/input validation,
-  and pure departure-window filtering and chronological ordering.
-- `timetable.py`: Playwright lifecycle, public form submission, response parsing,
-  and retrieval errors. Every invocation uses a fresh context and closes it and
-  its browser in `finally` blocks. There are no sleeps or retries.
-- `cli.py`: Typer options, useful validation/error messages, and train display.
+The browser is visible by default; `--headless` hides it.
 
-The inspected page is [THSR Timetable and Fare Search](https://www.thsrc.com.tw/ArticleContent/a3b630bb-1066-4352-a1ef-58c7b4e8ef7c).
-Playwright selects stations by their displayed names, selects 單程, fills the
-visible date/time inputs, and clicks 查詢. It observes the page's own POST
-response to `https://www.thsrc.com.tw/TimeTable/Search`; it does not call that
-endpoint directly or use reservation APIs. The page renders only five trains
-at a time, while this response contains the full timetable, so one submission
-suffices and filtering is local. Fares, discounts, and car information are ignored.
+On the computer used for live checks, this default launch can display the
+CAPTCHA and then stalls after the answer is submitted. The complete terminal
+handoff, submission, and result parsing completed on 2026-10-02 with
+`--compatibility`. That mode requires installed Google Chrome and changes an
+automation indicator. This is a dated observation from that computer. The check does not establish
+why the default launch stalls. See
+[troubleshooting](docs/troubleshooting.md) for the flag's boundaries and the
+[verification record](docs/verification.md).
 
-The parser reads `DepartureTable.TrainItem` fields `TrainNumber`,
-`DepartureTime`, and `DestinationTime`. The latter is the destination arrival;
-`StationInfo` can instead show that station's later departure. Route/date headers
-and matching rows' `RunDate` are checked before results are returned. Leading
-zeros in train numbers are preserved. Malformed responses fail explicitly.
+```sh
+uv run thsr-watcher booking-search \
+  --from 台北 \
+  --to 台中 \
+  --date 2026-10-23 \
+  --after 17:00 \
+  --adults 1 \
+  --compatibility
+```
 
-Selectors/contracts to review if THSR changes the page: titles 出發站/到達站/票種,
-button names 查詢/不同意 (cookie refusal), `#Departdate03`, `#outWardTime`, the
-public response URL, and its `Title`/`TrainItem` fields. CAPTCHA/access challenges,
-HTTP errors (including 403/429/5xx), and unexpected content stop the search with a
-manual-handoff/error message. The tool never attempts to solve or bypass a challenge.
+1. Keep the terminal process running and open the printed CAPTCHA PNG path.
+2. Read the image yourself and enter the answer at the terminal prompt.
+3. The tool submits once and prints the results. It never selects a train.
 
-Special cross-night departure date labels were not present in the inspected
-responses. If a matching row contains one, the parser fails with a manual-check
-message rather than guessing its departure date. This is a deliberate limitation
-until a real example can establish the date-label semantics. Ordinary same-day
-windows are supported; overnight departure windows are rejected.
+Only an explicit CAPTCHA rejection allows another human answer in the same
+session, up to three answers total. Reopen the PNG at the same path to see the
+new image. Other outcomes end the session. Ctrl-C or EOF cancels and cleans up.
+The local session deadline is five minutes from the first CAPTCHA capture.
 
-## Verification record — 2026-09-08
+Searches assume one-way, standard-class travel with 1–10 adults. Only the
+displayed result set is returned, filtered by the requested earliest departure;
+there is no pagination. Missing trains must not be interpreted as sold out.
 
-The exact search command above succeeded against the official site in headless
-Chromium: **15 trains**, first `0845 17:11 → 18:15`, last
-`0681 19:46 → 20:46`. A separate public-form inspection of 台北 → 南港 on the
-same travel date after 23:00 returned 0690, 0862, and 0294; none had cross-night
-labels. Timetables can change, so these are verification observations.
+## Inputs and boundaries
 
-`tests/fixtures/timetable.json` is a trimmed capture of the first query's public
-response (72 rows), retaining only timetable/date fields used by the parser.
-The offline suite covers validation, all supported stations, filtering/ordering,
-response parsing, CLI success/empty/error cases, challenges/HTTP errors, and
-browser cleanup. The original package smoke test remains unchanged. Live checks
-are manual and are not part of `uv run pytest`.
+Supported stations: 南港、台北、板橋、桃園、新竹、苗栗、台中、彰化、雲林、嘉義、台南、左營.
+Origin and destination must differ. Dates use `YYYY-MM-DD` and cannot precede
+today in Asia/Taipei. Times use `HH:MM` without seconds or a timezone.
+
+CAPTCHAs are always answered externally by a human; no OCR or automated solving
+is implemented. Additional access challenges, explicit blocks, HTTP errors
+(including 403/429), and unexpected responses stop the search. The tool never
+continues to Pickup Information, handles personal data, creates a reservation,
+or pays.
+
+Search exit codes: `0` for success (including no matches), `2` for invalid input,
+and `1` for retrieval, browser, or response failures.
+
+## Development and documentation
+
+Run the offline test suite:
+
+```sh
+uv run pytest
+```
+
+Tests require no browser installation or network access.
+
+- [Development](docs/development.md): architecture, Python API, session lifecycle,
+  testing, and documentation conventions.
+- [Troubleshooting](docs/troubleshooting.md): browser options, diagnostics, and
+  selectors to review when the official site changes.
+- [Verification record](docs/verification.md): dated live observations, fixture
+  provenance, and remaining verification gaps.
