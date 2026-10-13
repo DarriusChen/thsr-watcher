@@ -3,8 +3,18 @@
 [Back to README](../README.md)
 
 These are dated observations, not guarantees of current site behavior. Regular
-[tests](development.md#setup-and-offline-tests) are offline; live searches are
-manual and stop at train results without selecting a train or making a reservation.
+[tests](development.md#setup-and-offline-tests) are offline. Live `booking-search`
+checks stop at train results. Live `book` creates a real unpaid reservation.
+The pickup form was inspected on 2026-10-12 as recorded below; membership
+confirmation and reservation completion have no detailed live verification
+record here.
+
+## User-reported functional run — 2026-10-13
+
+The user reported one functional run with no apparent problems. The exact
+command, browser mode, and reservation result were not supplied in that report,
+so it does not establish which individual paths were exercised. This review
+used offline tests and did not submit a live reservation.
 
 ## Latest recorded booking status
 
@@ -62,3 +72,11 @@ not been verified. Failure to refill or recapture ends the session with
 `UNKNOWN_ERROR`. See [development](development.md#booking-session-api) for the
 retry contract and [troubleshooting](troubleshooting.md#reservation-selectors)
 for selectors and recognized feedback assumptions.
+
+On 2026-10-12 the live pickup form was reached with `--compatibility` after a
+human CAPTCHA and a selected train. Its visible controls were `#idInputRadio`,
+`#idNumber`, `#mobilePhone`, `#email`, three membership radios, `input[name=agree]`,
+and the reservation button. The same form markup is present in the reservation
+page source. No reservation was submitted in that run. The 訂位代號 completion
+page remains unverified. A live check that passes the reservation button creates
+a real unpaid hold and is not part of `uv run pytest`.
