@@ -1,8 +1,9 @@
-"""One official reservation form submission per human CAPTCHA answer, ending on
-the train-results page.
+"""Official reservation form: one search submission per human CAPTCHA answer.
 
-Selectors are provisional until verified locally against THSR. Unknown markup
-fails closed: it never means no availability and never triggers another search.
+The book command may then select one parsed train, fill a local preset, and
+submit that reservation once. Pickup selectors follow the live form observed
+on 2026-10-12. Unknown markup fails closed: it never means no availability,
+never triggers another search, and never clicks twice.
 """
 
 import json
@@ -16,6 +17,7 @@ from playwright.sync_api import Page, sync_playwright
 from thsr_watcher.booking import BookingError
 from thsr_watcher.booking_models import (
     BookingSearchRequest, BookingSearchResult, BookingSearchStatus as Status,
+    DocumentType, PickupDetails, ReservationResult, ReservationStatus,
 )
 from thsr_watcher.models import Train
 
@@ -53,6 +55,31 @@ _SCAN_JS = """
 REJECTED = r"(驗證碼|檢測碼).{0,16}(錯誤|不正確|有誤)|invalid captcha|incorrect verification code"
 EXPIRED = r"(連線|工作階段|操作|網頁).{0,16}(逾時|過期|超時)|session.{0,16}(expired|timeout|timed out)"
 EMPTY = r"查無符合條件之車次|查無符合條件的車次|無符合條件之車次|no trains available"
+CONFIRM_TRAIN = "確認車次"
+PICKUP_BOX = re.compile(r"手機|行動電話|身分證|護照|居留證")
+RESERVATION_BUTTON = re.compile(r"^\s*(完成訂位|確認訂位)\s*$")
+DOCUMENT_TYPE = "#idInputRadio"
+DOCUMENT_NUMBER = "#idNumber"
+MOBILE_NUMBER = "#mobilePhone"
+EMAIL_FIELD = "#email"
+MEMBERSHIP_TGO = "#memberSystemRadio1"
+MEMBERSHIP_NONE = "#memberSystemRadio3"
+MEMBERSHIP_BOX = "#memberShipCheckBox"
+MEMBERSHIP_DIALOG = "#step3ConfirmModal"
+TERMS_CHECKBOX = 'input[name="agree"]'
+DOCUMENT_NAME = {
+    DocumentType.NATIONAL_ID: re.compile(r"身分證"),
+    DocumentType.PASSPORT: re.compile(r"護照"),
+    DocumentType.RESIDENCE_PERMIT: re.compile(r"居留證"),
+}
+RESERVATION_LABEL = "訂位代號"
+RESERVATION_CODE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z0-9]{8})(?![A-Za-z0-9])")
+RESERVATION_REJECTION = re.compile(r"訂位失敗|無法完成訂位|未能完成訂位|此車次已額滿|已無餘位|餘位不足")
+OUTCOME_WAIT = r"訂位代號|訂位失敗|無法完成訂位|未能完成訂位|已額滿|已無餘位|餘位不足"
+UNCERTAIN_MESSAGE = (
+    "The reservation outcome is uncertain and it may already exist. "
+    "Check THSR directly. This program will not submit again."
+)
 
 
 
@@ -85,6 +112,42 @@ def _request_description(request) -> str:
     url = urlsplit(request.url)
     path = "/".join(part.split(";", 1)[0] for part in url.path.split("/"))
     return f"{request.method} {request.resource_type} {url.hostname}{path}"
+
+
+def reservation_outcome(text: str) -> ReservationResult | None:
+    """Classify a reservation page without copying its text into the result."""
+    codes = set()
+    start = 0
+    while True:
+        at = text.find(RESERVATION_LABEL, start)
+        if at < 0:
+            break
+        window = text[at + len(RESERVATION_LABEL):at + len(RESERVATION_LABEL) + 80]
+        found = RESERVATION_CODE.search(window)
+        if found:
+            codes.add(found.group(1).upper())
+        start = at + len(RESERVATION_LABEL)
+    if len(codes) == 1:
+        return ReservationResult(
+            status=ReservationStatus.CONFIRMED, reservation_code=codes.pop(),
+            message="Reservation confirmed. No payment was made.",
+        )
+    if len(codes) > 1:
+        return ReservationResult(status=ReservationStatus.UNCERTAIN, message=UNCERTAIN_MESSAGE)
+    if RESERVATION_REJECTION.search(text):
+        return ReservationResult(
+            status=ReservationStatus.REJECTED,
+            message="THSR rejected the reservation. No payment was made.",
+        )
+    return None
+
+
+def _uncertain() -> ReservationResult:
+    return ReservationResult(status=ReservationStatus.UNCERTAIN, message=UNCERTAIN_MESSAGE)
+
+
+def _required(locator) -> bool:
+    return locator.get_attribute("required") is not None or locator.get_attribute("aria-required") == "true"
 
 
 def feedback_result(text: str) -> BookingSearchResult | None:
@@ -519,6 +582,201 @@ class PlaywrightBookingBrowser:
             trains=[train for train in trains if train.departure >= self._request.after],
             message="Currently presented as bookable in this search; no reservation has been created.",
         )
+
+    def select_train(self, train_number: str) -> None:
+        """Check one result radio and open the pickup form. Does not submit a reservation."""
+        if self._page is None:
+            raise BookingError("Session is closed; no train was selected.")
+        if not re.fullmatch(r"[0-9]+", train_number):
+            raise BookingError("Train is not in this search result; nothing was selected.")
+        self._check_access()
+        page = self._page
+        radio = page.locator(f'{TRAIN_RADIO}[querycode="{train_number}"]').locator("visible=true")
+        if radio.count() != 1:
+            raise BookingError("Selected train is not a single visible choice; nothing was clicked.")
+        radio.check()
+        confirm = page.get_by_role("button", name=CONFIRM_TRAIN, exact=True)
+        if confirm.count() != 1:
+            raise BookingError(
+                "Confirm-train control was not a single control; reservation was not submitted. "
+                + self._visible_field_names()
+            )
+        confirm.click(no_wait_after=True)
+        self._check_access()
+        try:
+            page.get_by_role("textbox", name=PICKUP_BOX).first.wait_for(state="visible", timeout=TIMEOUT_MS)
+        except Exception as exc:
+            raise BookingError(
+                "Pickup form was not recognized; reservation was not submitted. "
+                + self._visible_field_names()
+            ) from exc
+
+    def submit_reservation(self, pickup: PickupDetails) -> ReservationResult:
+        """Fill the preset and click the reservation button once."""
+        if self._page is None:
+            raise BookingError("Session is closed; reservation was not submitted.")
+        page = self._page
+        clicked = False
+        try:
+            self._check_access()
+            if re.search(EXPIRED, page.locator("body").inner_text(), re.I):
+                raise BookingError("THSR session expired; reservation was not submitted.")
+            document = self._visible(DOCUMENT_TYPE, "Document type")
+            document_value = self._option_value(document, DOCUMENT_NAME[pickup.document_type])
+            number = self._visible(DOCUMENT_NUMBER, "Document number")
+            mobile = self._visible(MOBILE_NUMBER, "Mobile number")
+            email = page.locator(EMAIL_FIELD)
+            email_count = email.count()
+            if email_count > 1 or (pickup.email and email_count != 1):
+                raise BookingError("Email field was not a single control; reservation was not submitted.")
+            if email_count == 1 and _required(email) and not pickup.email:
+                raise BookingError(
+                    "The pickup form requires an email and the preset has none; reservation was not submitted."
+                )
+            membership = page.locator(MEMBERSHIP_BOX)
+            membership_count = membership.count()
+            if pickup.use_same_id_membership and membership_count != 1:
+                raise BookingError(
+                    "Membership checkbox was not found; reservation was not submitted. "
+                    + self._visible_field_names()
+                )
+            if not pickup.use_same_id_membership and membership_count > 1:
+                raise BookingError(
+                    "Membership checkbox was not a single control; reservation was not submitted."
+                )
+            tgo = self._visible(MEMBERSHIP_TGO, "Membership choice") if pickup.use_same_id_membership else None
+            non_member = None if pickup.use_same_id_membership else self._visible(MEMBERSHIP_NONE, "Membership choice")
+            terms = self._visible(TERMS_CHECKBOX, "Terms checkbox")
+            button = self._reservation_button()
+            document.select_option(value=document_value)
+            number.fill(pickup.document_number)
+            mobile.fill(pickup.mobile)
+            if email_count == 1 and pickup.email:
+                email.fill(pickup.email)
+            if pickup.use_same_id_membership:
+                tgo.check()
+                membership.wait_for(state="visible", timeout=TIMEOUT_MS)
+                if not membership.is_enabled():
+                    raise BookingError(
+                        "Membership checkbox was not found; reservation was not submitted. "
+                        + self._visible_field_names()
+                    )
+                membership.check()
+            else:
+                if membership_count == 1 and membership.is_checked():
+                    if not membership.is_enabled():
+                        self._visible(MEMBERSHIP_TGO, "Membership choice").check()
+                        membership.wait_for(state="visible", timeout=TIMEOUT_MS)
+                    membership.uncheck()
+                if not non_member.is_checked():
+                    non_member.check()
+            if not terms.is_checked():
+                terms.check()
+            button = self._reservation_button()
+            self._check_access()
+            clicked = True
+            button.click(no_wait_after=True)
+            if pickup.use_same_id_membership:
+                self._confirm_membership()
+            return self._read_reservation_outcome()
+        except BookingError:
+            if clicked:
+                return _uncertain()
+            raise
+        except Exception:
+            if clicked:
+                return _uncertain()
+            raise BookingError("Reservation was not submitted.")
+
+    def _confirm_membership(self) -> None:
+        """Click the TGo account confirmation once. Never clicks 重新輸入."""
+        confirm = self._page.locator(MEMBERSHIP_DIALOG).get_by_role("button", name="確定", exact=True)
+        try:
+            confirm.wait_for(state="visible", timeout=TIMEOUT_MS)
+        except Exception as exc:
+            raise BookingError("Membership confirmation was not shown.") from exc
+        chosen = confirm.locator("visible=true")
+        if chosen.count() != 1:
+            raise BookingError("Membership confirmation was not a single control.")
+        label = " ".join(
+            part.strip()
+            for part in (chosen.inner_text() or "", chosen.get_attribute("value") or "")
+            if part.strip()
+        )
+        if label != "確定":
+            raise BookingError("Membership confirmation was not the confirm control.")
+        self._check_access()
+        chosen.click(no_wait_after=True)
+
+    def _visible(self, selector: str, description: str):
+        return self._single(self._page.locator(selector).locator("visible=true"), description)
+
+    def _option_value(self, select, pattern: re.Pattern[str]) -> str:
+        options = select.locator("option")
+        matched = []
+        for index in range(options.count()):
+            option = options.nth(index)
+            if pattern.search(option.inner_text() or ""):
+                matched.append(option.get_attribute("value"))
+        if len(matched) != 1 or not matched[0]:
+            raise BookingError(
+                "Document type was not a single control; reservation was not submitted. "
+                + self._visible_field_names()
+            )
+        return matched[0]
+
+    def _single(self, locator, description: str):
+        if locator.count() != 1:
+            raise BookingError(
+                f"{description} was not a single control; reservation was not submitted. "
+                + self._visible_field_names()
+            )
+        return locator
+
+    def _reservation_button(self):
+        button = self._page.get_by_role("button", name=RESERVATION_BUTTON)
+        if button.count() != 1:
+            raise BookingError(
+                "Reservation button was not a single control; reservation was not submitted. "
+                + self._visible_field_names()
+            )
+        label = (button.inner_text() or "") + (button.get_attribute("value") or "")
+        if re.search(r"付款|信用卡|支付", label):
+            raise BookingError("Payment controls are not used; reservation was not submitted.")
+        return button
+
+    def _read_reservation_outcome(self) -> ReservationResult:
+        page = self._page
+        try:
+            page.wait_for_function(
+                """(pattern) => new RegExp(pattern).test((document.body && document.body.innerText) || '')""",
+                arg=OUTCOME_WAIT,
+                timeout=TIMEOUT_MS,
+            )
+        except Exception:
+            return _uncertain()
+        try:
+            self._check_access()
+        except BookingError:
+            return _uncertain()
+        outcome = reservation_outcome(page.locator("body").inner_text())
+        return outcome or _uncertain()
+
+    def _visible_field_names(self) -> str:
+        """Structural field names only; input values are never read."""
+        try:
+            names = self._page.evaluate("""() => {
+                const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                return Array.from(document.querySelectorAll('input, select, button'))
+                    .filter(visible).slice(0, 12).map(el => {
+                        const name = el.getAttribute('name') || '';
+                        const type = el.getAttribute('type') || el.tagName.toLowerCase();
+                        return (type + (name ? ' ' + name : '')).slice(0, 60);
+                    });
+            }""")
+            return "Visible fields: " + ", ".join(names)
+        except Exception:
+            return "Visible fields unavailable."
 
     def close(self) -> None:
         self._page = None

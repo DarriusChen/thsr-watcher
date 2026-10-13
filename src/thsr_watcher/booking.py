@@ -11,8 +11,9 @@ from uuid import uuid4
 
 from thsr_watcher.booking_models import (
     BookingSearchRequest, BookingSearchResult, BookingSearchStatus,
-    BookingSessionStarted,
+    BookingSessionStarted, PickupDetails, ReservationResult, ReservationStatus,
 )
+from thsr_watcher.models import Train
 
 
 CAPTCHA_FILE = "captcha.png"
@@ -26,6 +27,8 @@ class BookingBrowser(Protocol):
     def start(self, request: BookingSearchRequest, captcha_path: Path) -> None: ...
     def submit(self, captcha_text: str) -> BookingSearchResult: ...
     def refresh_captcha(self, captcha_path: Path) -> None: ...
+    def select_train(self, train_number: str) -> None: ...
+    def submit_reservation(self, pickup: PickupDetails) -> ReservationResult: ...
     def close(self) -> None: ...
 
 
@@ -35,6 +38,8 @@ class _Session:
     directory: Path
     expires_at: datetime
     attempts: int = 0
+    trains: list[Train] | None = None
+    selected: Train | None = None
 
     @property
     def captcha_path(self) -> Path:
@@ -104,7 +109,9 @@ class BookingSessionManager:
                 raise BookingError("Could not prepare reservation search: " + str(exc)) from exc
             raise
 
-    def submit_captcha(self, session_id: str, captcha_text: str) -> BookingSearchResult:
+    def submit_captcha(
+        self, session_id: str, captcha_text: str, *, retain_on_success: bool = False,
+    ) -> BookingSearchResult:
         session = self._sessions.get(session_id)
         if session is None:
             return BookingSearchResult(
@@ -127,6 +134,10 @@ class BookingSessionManager:
             result = session.browser.submit(captcha_text.strip().upper())
             session.attempts += 1
             remaining = self._max_captcha_attempts - session.attempts
+            if result.status == BookingSearchStatus.SUCCESS and retain_on_success:
+                session.trains = list(result.trains)
+                keep_open = True
+                return result
             if result.status != BookingSearchStatus.CAPTCHA_REJECTED or remaining <= 0:
                 return result
             try:
@@ -155,6 +166,82 @@ class BookingSessionManager:
         finally:
             if not keep_open:
                 self.close_session(session_id)
+
+    def select_train(self, session_id: str, train_number: str) -> Train | ReservationResult:
+        """Open the pickup form for one parsed train, or report that nothing was submitted."""
+        session = self._retained_session(session_id)
+        if isinstance(session, ReservationResult):
+            return session
+        if self._clock() >= session.expires_at:
+            self._release(session_id)
+            return ReservationResult(
+                status=ReservationStatus.NOT_SUBMITTED,
+                message="Local session deadline elapsed; no train was selected.",
+            )
+        matches = [train for train in session.trains or [] if train.number == train_number]
+        if len(matches) != 1:
+            return ReservationResult(
+                status=ReservationStatus.NOT_SUBMITTED,
+                message="Train is not in this search result; nothing was selected.",
+            )
+        try:
+            session.browser.select_train(train_number)
+        except BookingError as exc:
+            self._release(session_id)
+            return ReservationResult(status=ReservationStatus.NOT_SUBMITTED, message=str(exc))
+        except Exception:
+            self._release(session_id)
+            return ReservationResult(
+                status=ReservationStatus.NOT_SUBMITTED,
+                message="Could not open the pickup form; no reservation was submitted.",
+            )
+        session.selected = matches[0]
+        return matches[0]
+
+    def submit_reservation(self, session_id: str, pickup: PickupDetails) -> ReservationResult:
+        """Submit once using pickup details already collected. Closes the session."""
+        session = self._retained_session(session_id)
+        if isinstance(session, ReservationResult):
+            return session
+        if session.selected is None:
+            self._release(session_id)
+            return ReservationResult(
+                status=ReservationStatus.NOT_SUBMITTED,
+                message="No train is selected; reservation was not submitted.",
+            )
+        if self._clock() >= session.expires_at:
+            self._release(session_id)
+            return ReservationResult(
+                status=ReservationStatus.NOT_SUBMITTED,
+                message="Local session deadline elapsed; reservation was not submitted.",
+            )
+        try:
+            result = session.browser.submit_reservation(pickup)
+        except BookingError as exc:
+            result = ReservationResult(status=ReservationStatus.NOT_SUBMITTED, message=str(exc))
+        except Exception:
+            result = ReservationResult(
+                status=ReservationStatus.UNCERTAIN,
+                message="The reservation outcome is uncertain and it may already exist. "
+                "Check THSR directly. This program will not submit again.",
+            )
+        self._release(session_id)
+        return result
+
+    def _retained_session(self, session_id: str) -> _Session | ReservationResult:
+        session = self._sessions.get(session_id)
+        if session is None or session.trains is None:
+            return ReservationResult(
+                status=ReservationStatus.NOT_SUBMITTED,
+                message="Session is unknown or already closed; no reservation was submitted.",
+            )
+        return session
+
+    def _release(self, session_id: str) -> None:
+        try:
+            self.close_session(session_id)
+        except BookingError:
+            return
 
     def close_session(self, session_id: str) -> None:
         session = self._sessions.pop(session_id, None)

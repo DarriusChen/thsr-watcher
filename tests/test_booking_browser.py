@@ -515,9 +515,303 @@ def test_details_ga_failure_requires_independent_search_outcome(browser_setup, h
     assert not session.captcha_path.exists()
 
 
+def _control(count=1, text="", required=False, checked=False, value=None):
+    control = MagicMock()
+    control.count.return_value = count
+    control.inner_text.return_value = text
+    control.is_checked.return_value = checked
+
+    def attribute(name):
+        if name == "required" and required:
+            return ""
+        if name == "value":
+            return value
+        return None
+
+    control.get_attribute.side_effect = attribute
+    return control
+
+
+def _options(*pairs):
+    nodes = []
+    for value, text in pairs:
+        option = MagicMock()
+        option.inner_text.return_value = text
+        option.get_attribute.side_effect = lambda name, value=value: value if name == "value" else None
+        nodes.append(option)
+    found = MagicMock()
+    found.count.return_value = len(nodes)
+    found.nth.side_effect = lambda index: nodes[index]
+    return found
+
+
+def _visible(control):
+    host = MagicMock()
+    host.locator.return_value = control
+    return host
+
+
+def _reservation_page(body_text="取票資訊"):
+    browser = adapter.PlaywrightBookingBrowser()
+    page = MagicMock()
+    browser._page = page
+    body = MagicMock()
+    body.inner_text.return_value = body_text
+    document = _control()
+    document.locator.return_value = _options(("0", "身分證字號"), ("1", "護照/居留證/入出境許可證號碼"))
+    controls = {
+        "body": body,
+        adapter.DOCUMENT_TYPE: _visible(document),
+        adapter.DOCUMENT_NUMBER: _visible(_control()),
+        adapter.MOBILE_NUMBER: _visible(_control()),
+        adapter.EMAIL_FIELD: _control(count=0),
+        adapter.MEMBERSHIP_TGO: _visible(_control()),
+        adapter.MEMBERSHIP_NONE: _visible(_control()),
+        adapter.MEMBERSHIP_BOX: _control(),
+        adapter.TERMS_CHECKBOX: _visible(_control()),
+        adapter.MEMBERSHIP_DIALOG: MagicMock(),
+    }
+    confirm = _control(text="確定")
+    confirm.locator.return_value = confirm
+    controls[adapter.MEMBERSHIP_DIALOG].get_by_role.return_value = confirm
+    page.locator.side_effect = lambda selector: controls.get(selector, MagicMock(count=MagicMock(return_value=0)))
+    page.evaluate.return_value = ["select idInputRadio"]
+    button = _control(text="完成訂位")
+    roles = {("button", adapter.RESERVATION_BUTTON.pattern, None): button}
+
+    def get_by_role(role, name=None, exact=None):
+        pattern = getattr(name, "pattern", name)
+        return roles[(role, pattern, exact)]
+
+    page.get_by_role.side_effect = get_by_role
+    return browser, page, controls, button
+
+
+def test_reservation_outcome_keeps_personal_text_out_of_the_result():
+    from thsr_watcher.booking_models import ReservationStatus
+
+    secret = "A123456789"
+    confirmed = adapter.reservation_outcome(f"取票人 {secret} 訂位代號 AB12CD34")
+    assert confirmed.status == ReservationStatus.CONFIRMED
+    assert confirmed.reservation_code == "AB12CD34"
+    assert secret not in confirmed.message
+    rejected = adapter.reservation_outcome(f"{secret} 此車次已額滿")
+    assert rejected.status == ReservationStatus.REJECTED and secret not in rejected.message
+    uncertain = adapter.reservation_outcome("訂位代號 AB12CD34 訂位代號 ZZ99YY88")
+    assert uncertain.status == ReservationStatus.UNCERTAIN
+    assert "AB12CD34" not in uncertain.message and "ZZ99YY88" not in uncertain.message
+    assert adapter.reservation_outcome("請確認訂位資料") is None
+    table = (
+        "取票識別碼\tA123456789\n"
+        "序號\t訂位代號\t交易狀態\n"
+        "1\tAB12CD34\t未付款（付款期限：2026-10-14）\n"
+    )
+    listed = adapter.reservation_outcome(table)
+    assert listed.status == ReservationStatus.CONFIRMED
+    assert listed.reservation_code == "AB12CD34"
+    assert secret not in listed.message
+
+
+def test_membership_checkbox_and_single_reservation_click():
+    from thsr_watcher.booking_models import DocumentType, PickupDetails, ReservationStatus
+
+    browser, _, controls, button = _reservation_page("訂位代號 AB12CD34")
+    pickup = PickupDetails(
+        document_type=DocumentType.NATIONAL_ID, document_number="A123456789",
+        mobile="0912345678", use_same_id_membership=True,
+    )
+    result = browser.submit_reservation(pickup)
+    document = controls[adapter.DOCUMENT_TYPE].locator.return_value
+    number = controls[adapter.DOCUMENT_NUMBER].locator.return_value
+    assert result.status == ReservationStatus.CONFIRMED
+    document.select_option.assert_called_once_with(value="0")
+    number.fill.assert_called_once_with("A123456789")
+    controls[adapter.MEMBERSHIP_TGO].locator.return_value.check.assert_called_once()
+    controls[adapter.MEMBERSHIP_BOX].check.assert_called_once()
+    controls[adapter.TERMS_CHECKBOX].locator.return_value.check.assert_called_once()
+    button.click.assert_called_once()
+    controls[adapter.MEMBERSHIP_DIALOG].get_by_role.return_value.click.assert_called_once()
+    assert "A123456789" not in result.message
+
+
+def test_missing_membership_confirmation_does_not_click_again():
+    from thsr_watcher.booking_models import DocumentType, PickupDetails, ReservationStatus
+
+    browser, _, controls, button = _reservation_page()
+    confirm = controls[adapter.MEMBERSHIP_DIALOG].get_by_role.return_value
+    confirm.wait_for.side_effect = TimeoutError("dialog")
+    pickup = PickupDetails(
+        document_type=DocumentType.NATIONAL_ID, document_number="A123456789",
+        mobile="0912345678", use_same_id_membership=True,
+    )
+    result = browser.submit_reservation(pickup)
+    assert result.status == ReservationStatus.UNCERTAIN
+    assert button.click.call_count == 1 and confirm.click.call_count == 0
+    assert pickup.document_number not in result.message
+
+
+def test_passport_uses_the_combined_document_option():
+    from thsr_watcher.booking_models import DocumentType, PickupDetails
+
+    browser, _, controls, button = _reservation_page("訂位代號 AB12CD34")
+    pickup = PickupDetails(document_type=DocumentType.PASSPORT, document_number="P1234567", mobile="0912345678")
+    browser.submit_reservation(pickup)
+    document = controls[adapter.DOCUMENT_TYPE].locator.return_value
+    document.select_option.assert_called_once_with(value="1")
+    button.click.assert_called_once()
+
+
+def test_skipped_membership_is_unchecked_and_a_missing_checkbox_does_not_submit():
+    from thsr_watcher.booking import BookingError
+    from thsr_watcher.booking_models import DocumentType, PickupDetails
+
+    browser, _, controls, button = _reservation_page()
+    checkbox = controls[adapter.MEMBERSHIP_BOX]
+    checkbox.is_checked.return_value = True
+    pickup = PickupDetails(document_type=DocumentType.NATIONAL_ID, document_number="A123456789", mobile="0912345678")
+    browser.submit_reservation(pickup)
+    checkbox.uncheck.assert_called_once()
+    checkbox.check.assert_not_called()
+    controls[adapter.MEMBERSHIP_NONE].locator.return_value.check.assert_called_once()
+    controls[adapter.MEMBERSHIP_DIALOG].get_by_role.return_value.click.assert_not_called()
+    assert button.click.call_count == 1
+
+    checkbox.count.return_value = 0
+    button.click.reset_mock()
+    wanted = pickup.model_copy(update={"use_same_id_membership": True})
+    with pytest.raises(BookingError, match="Membership checkbox was not found") as exc:
+        browser.submit_reservation(wanted)
+    assert button.click.call_count == 0
+    assert wanted.document_number not in str(exc.value) and wanted.mobile not in str(exc.value)
+
+
+def test_required_email_and_failed_fill_do_not_click_or_echo_secrets():
+    from thsr_watcher.booking import BookingError
+    from thsr_watcher.booking_models import DocumentType, PickupDetails
+
+    browser, _, controls, button = _reservation_page()
+    email = controls[adapter.EMAIL_FIELD]
+    email.count.return_value = 1
+    email.get_attribute.side_effect = lambda name: "" if name == "required" else None
+    pickup = PickupDetails(document_type=DocumentType.NATIONAL_ID, document_number="A123456789", mobile="0912345678")
+    with pytest.raises(BookingError, match="requires an email") as exc:
+        browser.submit_reservation(pickup)
+    assert button.click.call_count == 0 and pickup.document_number not in str(exc.value)
+
+    email.count.return_value = 0
+    number = controls[adapter.DOCUMENT_NUMBER].locator.return_value
+    number.fill.side_effect = RuntimeError("filled A123456789")
+    with pytest.raises(BookingError, match="Reservation was not submitted") as exc:
+        browser.submit_reservation(pickup)
+    assert "A123456789" not in str(exc.value) and button.click.call_count == 0
+
+
+def test_outcome_after_the_only_click_is_uncertain_or_rejected():
+    from thsr_watcher.booking_models import DocumentType, PickupDetails, ReservationStatus
+
+    browser, page, _, button = _reservation_page("此車次已額滿，證件 A123456789")
+    pickup = PickupDetails(document_type=DocumentType.NATIONAL_ID, document_number="A123456789", mobile="0912345678")
+    rejected = browser.submit_reservation(pickup)
+    assert rejected.status == ReservationStatus.REJECTED and button.click.call_count == 1
+    assert "A123456789" not in rejected.message
+
+    page.wait_for_function.side_effect = TimeoutError("A123456789")
+    button.click.reset_mock()
+    uncertain = browser.submit_reservation(pickup)
+    assert uncertain.status == ReservationStatus.UNCERTAIN and button.click.call_count == 1
+    assert "A123456789" not in uncertain.message and "will not submit again" in uncertain.message
+
+
+def test_payment_label_and_missing_train_are_not_clicked():
+    from thsr_watcher.booking import BookingError
+
+    browser, page, _, button = _reservation_page()
+    button.get_attribute.side_effect = lambda name: "付款" if name == "value" else None
+    from thsr_watcher.booking_models import DocumentType, PickupDetails
+    pickup = PickupDetails(document_type=DocumentType.NATIONAL_ID, document_number="A123456789", mobile="0912345678")
+    with pytest.raises(BookingError, match="Payment controls"):
+        browser.submit_reservation(pickup)
+    button.click.assert_not_called()
+
+    radio = MagicMock()
+    radio.count.return_value = 0
+    body = MagicMock()
+    body.inner_text.return_value = "車次列表"
+
+    def locator(selector):
+        if selector == "body":
+            return body
+        found = MagicMock()
+        found.locator.return_value = radio
+        found.count.return_value = 0
+        return found
+
+    page.locator.side_effect = locator
+    with pytest.raises(BookingError, match="nothing was clicked"):
+        browser.select_train("0149")
+    radio.check.assert_not_called()
+
+
+def test_select_train_checks_one_radio_and_one_confirm_button():
+    browser = adapter.PlaywrightBookingBrowser()
+    page = MagicMock()
+    browser._page = page
+    body = MagicMock()
+    body.inner_text.return_value = "車次列表"
+    radio = MagicMock()
+    radio.count.return_value = 1
+    challenge = MagicMock()
+    challenge.count.return_value = 0
+
+    def locator(selector):
+        if selector == "body":
+            return body
+        if "querycode" in selector:
+            found = MagicMock()
+            found.locator.return_value = radio
+            return found
+        return challenge
+
+    page.locator.side_effect = locator
+    confirm = _control()
+    pickup = MagicMock()
+    page.get_by_role.side_effect = lambda role, name=None, exact=None: confirm if role == "button" else pickup
+    browser.select_train("0149")
+    radio.check.assert_called_once()
+    confirm.click.assert_called_once()
+    pickup.first.wait_for.assert_called_once()
+
+
 def test_ga_exception_does_not_cover_documents_posts_or_other_scripts():
     url = "https://irs.thsrc.com.tw/IMINT/js/GA/DetailsGA.js"
     assert not adapter._is_telemetry(Mock(url=url, method="GET", resource_type="document"))
     assert not adapter._is_telemetry(Mock(url=url, method="POST", resource_type="xhr"))
     assert not adapter._is_telemetry(Mock(
         url="https://irs.thsrc.com.tw/IMINT/js/reservation.js", method="GET", resource_type="xhr"))
+
+
+@pytest.mark.parametrize("blocked_at", ["terms", "membership_dialog"])
+def test_access_error_prevents_next_reservation_click(blocked_at):
+    from thsr_watcher.booking_models import PickupDetails, ReservationStatus
+
+    browser, _, controls, button = _reservation_page()
+    pickup = PickupDetails(
+        document_type="national_id", document_number="A123456789", mobile="0912345678",
+        use_same_id_membership=True,
+    )
+
+    def blocked(*args, **kwargs):
+        browser._request_errors.append("HTTP 403")
+
+    confirm = controls[adapter.MEMBERSHIP_DIALOG].get_by_role.return_value
+    if blocked_at == "terms":
+        controls[adapter.TERMS_CHECKBOX].locator.return_value.check.side_effect = blocked
+        with pytest.raises(BookingError, match="HTTP 403"):
+            browser.submit_reservation(pickup)
+        button.click.assert_not_called()
+    else:
+        confirm.wait_for.side_effect = blocked
+        result = browser.submit_reservation(pickup)
+        assert result.status == ReservationStatus.UNCERTAIN
+        button.click.assert_called_once()
+    confirm.click.assert_not_called()

@@ -1,16 +1,23 @@
-"""CLI validation and presentation for timetable and booking searches."""
+"""CLI validation and presentation for timetable search and local booking."""
 
+from datetime import timedelta
 from typing import Annotated
 
 import typer
 from pydantic import ValidationError
 
 from thsr_watcher.booking import BookingError, BookingSessionManager
-from thsr_watcher.booking_models import BookingSearchRequest, BookingSearchStatus
-from thsr_watcher.models import SearchRequest
+from thsr_watcher.booking_models import (
+    BookingSearchRequest, BookingSearchStatus, DocumentType, PickupDetails, ReservationResult,
+    ReservationStatus,
+)
+from thsr_watcher.booking_preset import PresetError, clear_preset, load_preset, masked_summary, save_preset
+from thsr_watcher.models import SearchRequest, Train
 from thsr_watcher.timetable import TimetableError, search_trains
 
-app = typer.Typer(help="THSR timetable and human-assisted booking search.")
+app = typer.Typer(help="THSR timetable search and human-assisted local booking.")
+BOOKING_TTL = timedelta(minutes=10)
+_DOCUMENT_TYPES = {"身分證": DocumentType.NATIONAL_ID, "護照": DocumentType.PASSPORT, "居留證": DocumentType.RESIDENCE_PERMIT}
 
 
 @app.callback(invoke_without_command=True)
@@ -85,20 +92,7 @@ def booking_search(
             headless=headless, chrome=chrome, compatibility=compatibility,
         ) as manager:
             session = manager.start_search(request)
-            typer.echo(f"Booking session created: {session.session_id}")
-            typer.echo(f"CAPTCHA image: {session.captcha_path}")
-            typer.echo(f"Open this PNG externally and read it yourself. Local deadline: {session.expires_at.isoformat()}")
-            typer.echo("Keep this process running; Ctrl-C cancels and removes the image.")
-            answer = typer.prompt("Enter CAPTCHA", hide_input=True)
-            result = manager.submit_captcha(session.session_id, answer)
-            while result.captcha_attempts_remaining:
-                typer.echo(f"{result.status.value}: {result.message}")
-                typer.echo(
-                    f"New CAPTCHA image: {session.captcha_path} "
-                    f"({result.captcha_attempts_remaining} attempts remaining)"
-                )
-                answer = typer.prompt("Enter CAPTCHA", hide_input=True)
-                result = manager.submit_captcha(session.session_id, answer)
+            result = _captcha_handoff(manager, session)
     except BookingError as exc:
         typer.echo(f"Booking search failed: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -121,3 +115,161 @@ def booking_manual_check() -> None:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     typer.echo("Diagnostic finished. HTTP status alone does not confirm bookable results.")
+
+
+def _captcha_handoff(manager: BookingSessionManager, session, *, retain: bool = False):
+    typer.echo(f"Booking session created: {session.session_id}")
+    typer.echo(f"CAPTCHA image: {session.captcha_path}")
+    typer.echo(f"Open this PNG externally and read it yourself. Local deadline: {session.expires_at.isoformat()}")
+    typer.echo("Keep this process running; Ctrl-C cancels and removes the image.")
+    answer = typer.prompt("Enter CAPTCHA", hide_input=True)
+    kwargs = {"retain_on_success": True} if retain else {}
+    result = manager.submit_captcha(session.session_id, answer, **kwargs)
+    while result.captcha_attempts_remaining:
+        typer.echo(f"{result.status.value}: {result.message}")
+        typer.echo(
+            f"New CAPTCHA image: {session.captcha_path} "
+            f"({result.captcha_attempts_remaining} attempts remaining)"
+        )
+        answer = typer.prompt("Enter CAPTCHA", hide_input=True)
+        result = manager.submit_captcha(session.session_id, answer, **kwargs)
+    return result
+
+
+preset_app = typer.Typer(help="Save, show, or clear the local booking preset.", invoke_without_command=True)
+app.add_typer(preset_app, name="book-preset")
+
+
+@preset_app.callback(invoke_without_command=True)
+def book_preset(ctx: typer.Context) -> None:
+    """Save pickup details before a booking. show and clear inspect or delete them."""
+    if ctx.invoked_subcommand is None:
+        _save_preset_from_prompts()
+
+
+@preset_app.command("show")
+def preset_show() -> None:
+    """Print the saved preset with document and mobile numbers masked."""
+    try:
+        typer.echo(masked_summary(load_preset()))
+    except PresetError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+
+
+@preset_app.command("clear")
+def preset_clear() -> None:
+    """Delete the local booking preset."""
+    clear_preset()
+    typer.echo("Booking preset cleared.")
+
+
+def _save_preset_from_prompts() -> None:
+    document_type = typer.prompt("Document type (身分證, 護照, or 居留證)")
+    if document_type not in _DOCUMENT_TYPES:
+        typer.echo("Invalid document type: choose 身分證, 護照, or 居留證", err=True)
+        raise typer.Exit(2)
+    document_number = typer.prompt("Document number", hide_input=True)
+    mobile = typer.prompt("Mobile", hide_input=True)
+    email = typer.prompt("Email (optional)", default="", show_default=False, hide_input=True)
+    membership = typer.prompt("Check 同取票人身分證字號? [y/n]")
+    if membership not in {"y", "n"}:
+        typer.echo("Invalid membership choice: enter y or n", err=True)
+        raise typer.Exit(2)
+    try:
+        details = PickupDetails(
+            document_type=_DOCUMENT_TYPES[document_type],
+            document_number=document_number,
+            mobile=mobile,
+            email=email,
+            use_same_id_membership=membership == "y",
+        )
+    except ValidationError as exc:
+        _echo_validation(exc)
+        raise typer.Exit(2) from exc
+    typer.echo(masked_summary(details))
+    if typer.prompt("Type yes to save this preset") != "yes":
+        typer.echo("Preset was not saved.")
+        raise typer.Exit(1)
+    try:
+        save_preset(details)
+    except OSError as exc:
+        typer.echo("Could not save the booking preset.", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo("Preset saved.")
+
+
+def _echo_validation(exc: ValidationError) -> None:
+    for error in exc.errors():
+        field = ".".join(str(part) for part in error["loc"]) or "preset"
+        typer.echo(f"Invalid {field}: {error['msg']}", err=True)
+
+
+@app.command()
+def book(
+    origin: Annotated[str, typer.Option("--from", help="Origin station, e.g. 台北.")],
+    destination: Annotated[str, typer.Option("--to", help="Destination station, e.g. 台中.")],
+    travel_date: Annotated[str, typer.Option("--date", help="Travel date YYYY-MM-DD (Taiwan time).")],
+    after: Annotated[str, typer.Option("--after", help="Earliest departure HH:MM.")],
+    adult_passengers: Annotated[int, typer.Option("--adults", help="Adult passengers (1–10).")] = 1,
+    headless: Annotated[bool, typer.Option("--headless", help="Hide the browser; headed by default.")] = False,
+    chrome: Annotated[bool, typer.Option("--chrome", help="Use installed Google Chrome in a fresh isolated session.")] = False,
+    compatibility: Annotated[
+        bool,
+        typer.Option(
+            "--compatibility",
+            help="Opt in to the installed-Chrome automation compatibility experiment.",
+        ),
+    ] = False,
+) -> None:
+    """Select one bookable train and submit one reservation from the local preset."""
+    try:
+        preset = load_preset()
+    except PresetError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    try:
+        request = BookingSearchRequest(
+            origin=origin, destination=destination, travel_date=travel_date,
+            after=after, adult_passengers=adult_passengers,
+        )
+    except ValidationError as exc:
+        _echo_validation(exc)
+        raise typer.Exit(2) from exc
+    typer.echo(masked_summary(preset))
+    try:
+        with BookingSessionManager(
+            headless=headless, chrome=chrome, compatibility=compatibility, ttl=BOOKING_TTL,
+        ) as manager:
+            session = manager.start_search(request)
+            result = _captcha_handoff(manager, session, retain=True)
+            if result.status != BookingSearchStatus.SUCCESS:
+                _echo_search_failure(result)
+            if not result.trains:
+                typer.echo("No currently bookable trains shown. No reservation was submitted.")
+                return
+            for train in result.trains:
+                typer.echo(f"Train {train.number}   {train.departure:%H:%M} → {train.arrival:%H:%M}")
+            selected = manager.select_train(session.session_id, typer.prompt("Train number").strip())
+            if isinstance(selected, ReservationResult):
+                typer.echo(f"{selected.status.value}: {selected.message}")
+                raise typer.Exit(1)
+            reservation = manager.submit_reservation(session.session_id, preset)
+    except BookingError as exc:
+        typer.echo(f"Booking failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    _echo_reservation(reservation, selected)
+
+
+def _echo_search_failure(result) -> None:
+    typer.echo(f"{result.status.value}: {result.message}")
+    raise typer.Exit(1)
+
+
+def _echo_reservation(reservation: ReservationResult, train: Train) -> None:
+    typer.echo(f"{reservation.status.value}: {reservation.message}")
+    if reservation.status == ReservationStatus.CONFIRMED:
+        typer.echo(f"Train {train.number}   reservation code {reservation.reservation_code}")
+        typer.echo("No payment was made.")
+        return
+    raise typer.Exit(1)

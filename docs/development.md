@@ -14,7 +14,8 @@ uv run pytest
 Regular tests use fixtures, fake browser sessions, and mocked Playwright. They
 require neither a browser installation nor network access. They cover input
 validation, parsing and ordering, CLI behavior, CAPTCHA handoff and rejection,
-expiry and error mapping, simultaneous session ownership, and cleanup.
+expiry and error mapping, simultaneous session ownership, cleanup, the
+owner-only booking preset, and one-shot reservation submission.
 Live verification is manual; see the [verification record](verification.md).
 
 ## Timetable implementation
@@ -85,6 +86,47 @@ driver cleanup keeps other sessions alive. This synchronous API is for one
 owner thread; an async bot must dispatch its calls to a dedicated owner thread,
 not invoke them directly inside its event loop.
 
+`submit_captcha(..., retain_on_success=True)` keeps that same browser open after
+`SUCCESS` so `book` can select a train. The default remains to close. Retained
+sessions record the parsed trains. `select_train` clicks only a train number
+present exactly once in that list; any other number returns `NOT_SUBMITTED`
+without a click. `submit_reservation` accepts pickup details already loaded by
+the caller, checks the local deadline again, submits once, and then closes the
+session. The `book` command uses a 10-minute local TTL.
+
+## Booking preset and reservation result
+
+`booking_preset.py` reads and writes `~/.config/thsr-watcher/booking-preset.json`.
+The file must be a regular file owned by the current user with owner-only
+permissions; symlinks are rejected on load. Saves write a private temporary
+file in the preset directory and atomically replace the preset, so a failed
+write preserves the previous file. This is the only store for the document
+number, mobile, optional email, and `use_same_id_membership`. Logs, diagnostics,
+and the CAPTCHA directory do not receive those values. `masked_summary` shows
+only the last three characters of the document number and mobile.
+The CLI hides document, mobile, and email input.
+
+`ReservationResult` is `CONFIRMED` only with one 8-character code labeled
+訂位代號. Explicit rejection text and no code is `REJECTED`. A page that does
+not establish either, after the reservation button has been clicked, is
+`UNCERTAIN`. Missing controls, a missing required email, a missing membership
+checkbox, or an elapsed local deadline are `NOT_SUBMITTED` and do not click
+that button. Messages do not copy the pickup page text.
+An unexpected adapter exception during submission is `UNCERTAIN` because the
+session manager cannot establish whether the click already happened. The
+browser checks for access errors before the reservation and TGo confirmation
+clicks; a block after the reservation click also yields `UNCERTAIN`.
+
+`booking_browser.py` selects `querycode` for the chosen train, clicks the single
+確認車次 control, then fills the live pickup form: `#idInputRadio` (身分證, or
+the combined 護照/居留證 option), `#idNumber`, `#mobilePhone`, and optional
+`#email`. Same-ID membership checks `#memberSystemRadio1` (高鐵會員 TGo) and
+then `#memberShipCheckBox`; otherwise it leaves `#memberSystemRadio3` selected.
+It also checks the single `agree` terms box, then clicks 完成訂位 or 確認訂位
+once. When same-ID membership was requested, it then clicks the single 確定
+button in `#step3ConfirmModal` once and does not click 重新輸入. It never
+clicks a payment control. Unknown markup fails closed.
+
 `start_search()` leaves the driver, browser, context, cookies, and page open.
 It screenshots the loaded CAPTCHA **element** using `locator.screenshot()` and
 returns a PNG path under the OS temporary directory, in a unique private
@@ -93,9 +135,10 @@ No OCR, image interpretation, CAPTCHA endpoint calls, or automated answer
 retrieval is implemented. `submit_captcha()` calls the same browser owner and
 fills the same page, then consumes/closes the session, except after an
 explicit CAPTCHA rejection with answers remaining (`max_captcha_attempts`,
-an integer from 1 to 3, default 3): then the criteria are refilled on the same page, a new CAPTCHA is
-captured to the same path, and the result has a nonzero
-`captcha_attempts_remaining`. The browser accepts exactly one submission per
+an integer from 1 to 3, default 3), or when `retain_on_success` keeps a
+successful search open for `book`. On a CAPTCHA retry the criteria are refilled
+on the same page, a new CAPTCHA is captured to the same path, and the result
+has a nonzero `captcha_attempts_remaining`. The browser accepts exactly one submission per
 captured CAPTCHA.
 The browser, context, driver reference, and image directory are released on
 submission, cancellation, failed setup, explicit close, or manager exit.

@@ -3,10 +3,13 @@
 [Back to README](../README.md)
 
 Use a valid travel date supported by THSR in all commands below; the example
-`2026-10-23` is illustrative. Stop at results, an error, or an access challenge.
-Never select a train or continue to Pickup Information. Do not automatically
-retry with different browser settings, proxies, or identities after a block or
-HTTP 403/429 response.
+`2026-10-23` is illustrative. `booking-search` and `booking-manual-check` stop
+at results, an error, or an access challenge, and never select a train.
+`book` runs its own search and continues in that same retained session using
+the local preset; it submits a reservation once and does not pay.
+It cannot resume a closed `booking-search` or diagnostic session.
+Do not automatically retry with different
+browser settings, proxies, or identities after a block or HTTP 403/429 response.
 
 ## Known booking compatibility limitation
 
@@ -122,8 +125,26 @@ Review these selectors and assumptions when maintaining the browser integration:
   the label text shows only departure and arrival. The train number is read
   from the radio's `querycode` attribute (times from `querydeparture`/
   `queryarrival`, else the label), verified live on 2026-10-02. A radio
-  without them fails with its attribute names listed. Radios are never
-  clicked. `table.result_table` remains as an older-markup fallback.
+  without them fails with its attribute names listed. `booking-search` never
+  clicks radios; `book` checks the one train chosen by the user.
+  `table.result_table` remains as an older-markup parsing fallback; `book`
+  requires a single visible `querycode` radio for selection.
 - Error containers: `.feedbackPanel`, `.feedbackPanelERROR`, `[role=alert]`,
   `.alert-danger`; recognized Chinese/English rejection, expiry, and empty-result
   phrases are defined in `booking_browser.py`. Unknown variants fail explicitly.
+- `book` after a train is selected, observed on the live form 2026-10-12:
+  button name `確認車次`. Document type is `#idInputRadio`: one option whose
+  text contains 身分證, or one combined option containing 護照 and 居留證.
+  Document number is `#idNumber` (`dummyId`); mobile is `#mobilePhone`
+  (`dummyPhone`); optional email is `#email`. Membership radios are
+  `#memberSystemRadio3` (非高鐵會員) and `#memberSystemRadio1` (高鐵會員 TGo).
+  The same-ID checkbox `#memberShipCheckBox` is revealed only after the TGo
+  radio is selected, and only for a national ID. The terms checkbox is
+  `input[name=agree]`. The reservation button is `完成訂位` or `確認訂位`.
+  With same-ID membership, that click opens `#step3ConfirmModal`; the tool
+  clicks its single 確定 button once and does not click 重新輸入. The
+  reservation code is the 8-character token within 80 characters after
+  訂位代號, including the next table cell. A labeled 訂位代號 is required
+  before a result is `CONFIRMED`. Payment controls are not clicked. If these
+  controls are missing or not unique, the reservation is not submitted. A
+  missing confirmation after 完成訂位 is `UNCERTAIN`.

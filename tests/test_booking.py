@@ -7,8 +7,12 @@ import pytest
 from pydantic import ValidationError
 
 from thsr_watcher.booking import BookingError, BookingSessionManager
-from thsr_watcher.booking_models import BookingSearchRequest, BookingSearchResult, BookingSearchStatus as Status
+from thsr_watcher.booking_models import (
+    BookingSearchRequest, BookingSearchResult, BookingSearchStatus as Status,
+    PickupDetails, ReservationResult, ReservationStatus,
+)
 from thsr_watcher.booking_browser import feedback_result, parse_train_radios, parse_train_rows
+from thsr_watcher.models import Train
 
 
 @pytest.fixture
@@ -23,6 +27,14 @@ class FakeBrowser:
         self.result = BookingSearchResult(status=Status.SUCCESS)
         self.refreshes = 0
         self.refresh_error = None
+        self.selected = []
+        self.submitted = []
+        self.select_error = None
+        self.reservation_error = None
+        self.reservation = ReservationResult(
+            status=ReservationStatus.CONFIRMED, reservation_code="AB12CD34",
+            message="Reservation confirmed. No payment was made.",
+        )
 
     def start(self, request, captcha_path):
         self.request = request
@@ -43,6 +55,19 @@ class FakeBrowser:
         if self.refresh_error:
             raise self.refresh_error
         captcha_path.write_bytes(b"new challenge")
+
+    def select_train(self, train_number):
+        assert not self.closed
+        self.selected.append(train_number)
+        if self.select_error:
+            raise self.select_error
+
+    def submit_reservation(self, pickup):
+        assert not self.closed
+        self.submitted.append(pickup)
+        if self.reservation_error:
+            raise self.reservation_error
+        return self.reservation
 
     def close(self):
         self.closed = True
@@ -259,6 +284,67 @@ def test_train_radio_without_number_or_two_times_is_unknown(radio):
         parse_train_radios([radio])
 
 
+def test_pickup_validation_and_retained_booking(booking_request):
+    with pytest.raises(ValidationError, match="invalid national ID"):
+        PickupDetails(document_type="national_id", document_number="A123456788", mobile="0912345678")
+    with pytest.raises(ValidationError, match="membership checkbox requires a national ID"):
+        PickupDetails(
+            document_type="passport", document_number="AB123456", mobile="0912345678",
+            use_same_id_membership=True,
+        )
+    pickup = PickupDetails(
+        document_type="national_id", document_number="a123456789", mobile="0912345678",
+        use_same_id_membership=True,
+    )
+    assert pickup.document_number == "A123456789"
+    train = Train(number="0149", departure="17:31", arrival="18:18")
+    browser = FakeBrowser()
+    browser.result = BookingSearchResult(status=Status.SUCCESS, trains=[train])
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+    with BookingSessionManager(browser_factory=lambda: browser, clock=lambda: now) as manager:
+        started = manager.start_search(booking_request)
+        assert manager.submit_captcha(started.session_id, "answer", retain_on_success=True).status == Status.SUCCESS
+        assert not browser.closed
+        missed = manager.select_train(started.session_id, "0000")
+        assert missed.status == ReservationStatus.NOT_SUBMITTED and browser.selected == []
+        assert manager.select_train(started.session_id, "0149").number == "0149"
+        assert browser.selected == ["0149"]
+        now = started.expires_at
+        expired = manager.submit_reservation(started.session_id, pickup)
+        assert expired.status == ReservationStatus.NOT_SUBMITTED and browser.submitted == []
+        assert pickup.document_number not in expired.message and pickup.mobile not in expired.message
+        assert browser.closed
+
+
+def test_default_success_still_closes_and_submit_needs_a_retained_train(booking_request):
+    browser = FakeBrowser()
+    train = Train(number="0149", departure="17:31", arrival="18:18")
+    browser.result = BookingSearchResult(status=Status.SUCCESS, trains=[train])
+    pickup = PickupDetails(document_type="national_id", document_number="A123456789", mobile="0912345678")
+    with BookingSessionManager(browser_factory=lambda: browser) as manager:
+        started = manager.start_search(booking_request)
+        assert manager.submit_captcha(started.session_id, "answer").status == Status.SUCCESS
+        assert browser.closed
+        skipped = manager.submit_reservation(started.session_id, pickup)
+        assert skipped.status == ReservationStatus.NOT_SUBMITTED and browser.submitted == []
+
+
+def test_reservation_submit_is_single_and_closes(booking_request):
+    browser = FakeBrowser()
+    train = Train(number="0149", departure="17:31", arrival="18:18")
+    browser.result = BookingSearchResult(status=Status.SUCCESS, trains=[train])
+    pickup = PickupDetails(document_type="national_id", document_number="A123456789", mobile="0912345678")
+    with BookingSessionManager(browser_factory=lambda: browser) as manager:
+        started = manager.start_search(booking_request)
+        manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        manager.select_train(started.session_id, "0149")
+        result = manager.submit_reservation(started.session_id, pickup)
+        assert result.reservation_code == "AB12CD34"
+        assert browser.submitted == [pickup] and browser.closed
+        again = manager.submit_reservation(started.session_id, pickup)
+        assert again.status == ReservationStatus.NOT_SUBMITTED and len(browser.submitted) == 1
+
+
 def test_feedback_requires_explicit_outcome():
     assert feedback_result("驗證碼輸入錯誤").status == Status.CAPTCHA_REJECTED
     assert feedback_result("檢測碼輸入錯誤，請確認後重新輸入").status == Status.CAPTCHA_REJECTED
@@ -266,3 +352,28 @@ def test_feedback_requires_explicit_outcome():
     assert feedback_result("查無符合條件之車次").status == Status.SUCCESS
     assert feedback_result("請輸入驗證碼") is None
     assert feedback_result("伺服器錯誤") is None
+
+
+def test_unexpected_reservation_exception_is_uncertain_and_closes(booking_request):
+    browser = FakeBrowser()
+    browser.result = BookingSearchResult(
+        status=Status.SUCCESS,
+        trains=[Train(number="0149", departure="17:31", arrival="18:18")],
+    )
+    pickup = PickupDetails(document_type="national_id", document_number="A123456789", mobile="0912345678")
+
+    def submit_then_fail(details):
+        browser.submitted.append(details)
+        raise RuntimeError(details.document_number)
+
+    browser.submit_reservation = submit_then_fail
+    with BookingSessionManager(browser_factory=lambda: browser) as manager:
+        started = manager.start_search(booking_request)
+        manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        manager.select_train(started.session_id, "0149")
+        result = manager.submit_reservation(started.session_id, pickup)
+        assert result.status == ReservationStatus.UNCERTAIN
+        assert pickup.document_number not in result.message
+        assert browser.closed
+        assert manager.submit_reservation(started.session_id, pickup).status == ReservationStatus.NOT_SUBMITTED
+        assert len(browser.submitted) == 1
