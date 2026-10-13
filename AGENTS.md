@@ -20,14 +20,22 @@
 - Use conservative polling and respect server errors and rate limits. Do not
   implement aggressive polling or mechanisms intended to evade limits.
 
-VS-02 may open the official reservation search form, fill search criteria,
-capture the CAPTCHA element, accept one human answer in the same live session,
-submit once per answer, and parse currently bookable trains. Only after THSR
-explicitly rejects the CAPTCHA may the same live session recapture a new
+VS-02 `booking-search` may open the official reservation search form, fill search
+criteria, capture the CAPTCHA element, accept one human answer in the same live
+session, submit once per answer, and parse currently bookable trains. Only after
+THSR explicitly rejects the CAPTCHA may the same live session recapture a new
 CAPTCHA and accept another human answer, up to 3 answers per session in total;
-any other outcome ends the session. Stop at train results: never
-select a train, enter Pickup Information, handle personal data, create a
-reservation, or pay.
+any other outcome ends the session. `booking-search` and diagnostics stop at
+train results: never select a train, enter pickup information, handle personal
+data, create a reservation, or pay.
 
-Polling/watchers, notifications, messaging integrations, persistence, and
-reservation completion remain out of scope. Regular tests must be offline.
+VS-03 `book` may continue one retained search session: select one train from
+that search's parsed results, fill pickup details from the local booking
+preset, check the same-ID membership box only when the preset says so, submit
+the reservation once, and report a confirmed code, an explicit rejection, or an
+uncertain outcome. It does not log in, pay, or retry a reservation submission.
+Personal data may be stored only in the owner-only preset file, never in logs,
+diagnostics, or the CAPTCHA directory.
+
+Polling, watchers, notifications, and messaging integrations remain out of
+scope. Regular tests must be offline.
