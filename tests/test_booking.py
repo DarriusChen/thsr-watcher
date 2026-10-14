@@ -29,6 +29,10 @@ class FakeBrowser:
         self.refresh_error = None
         self.selected = []
         self.submitted = []
+        self.steps = []
+        self.earlier = False
+        self.later_page = False
+        self.step_result = BookingSearchResult(status=Status.SUCCESS)
         self.select_error = None
         self.reservation_error = None
         self.reservation = ReservationResult(
@@ -55,6 +59,23 @@ class FakeBrowser:
         if self.refresh_error:
             raise self.refresh_error
         captcha_path.write_bytes(b"new challenge")
+
+    def has_later_results(self):
+        return False
+
+    def has_earlier_results(self):
+        return self.earlier
+
+    def can_step_later(self):
+        return self.later_page
+
+    def step_result_page(self, direction):
+        assert not self.closed
+        self.steps.append(direction)
+        result = self.step_result
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     def select_train(self, train_number):
         assert not self.closed
@@ -307,6 +328,7 @@ def test_pickup_validation_and_retained_booking(booking_request):
         assert not browser.closed
         missed = manager.select_train(started.session_id, "0000")
         assert missed.status == ReservationStatus.NOT_SUBMITTED and browser.selected == []
+        assert "Return to the page that lists it" in missed.message
         assert manager.select_train(started.session_id, "0149").number == "0149"
         assert browser.selected == ["0149"]
         now = started.expires_at
@@ -314,6 +336,24 @@ def test_pickup_validation_and_retained_booking(booking_request):
         assert expired.status == ReservationStatus.NOT_SUBMITTED and browser.submitted == []
         assert pickup.document_number not in expired.message and pickup.mobile not in expired.message
         assert browser.closed
+
+
+def test_step_trains_replaces_the_retained_page(booking_request):
+    first = Train(number="0149", departure="17:31", arrival="18:18")
+    later = Train(number="0803", departure="18:05", arrival="19:00")
+    browser = FakeBrowser()
+    browser.result = BookingSearchResult(status=Status.SUCCESS, trains=[first])
+    browser.later_page = True
+    browser.step_result = BookingSearchResult(status=Status.SUCCESS, trains=[later])
+    with BookingSessionManager(browser_factory=lambda: browser) as manager:
+        started = manager.start_search(booking_request)
+        manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        stepped = manager.step_trains(started.session_id, "later")
+        assert [train.number for train in stepped.trains] == ["0803"]
+        assert browser.steps == ["later"]
+        missed = manager.select_train(started.session_id, "0149")
+        assert missed.status == ReservationStatus.NOT_SUBMITTED and browser.selected == []
+        assert manager.select_train(started.session_id, "0803").number == "0803"
 
 
 def test_default_success_still_closes_and_submit_needs_a_retained_train(booking_request):

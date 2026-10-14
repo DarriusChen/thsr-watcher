@@ -77,17 +77,51 @@ def test_booking_cli_handoff_and_cleanup(
     now = datetime.now(timezone.utc)
     manager.start_search.return_value = BookingSessionStarted(session_id="session", captcha_path=tmp_path / "captcha.png", started_at=now, expires_at=now)
     manager.submit_captcha.return_value = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[Train(number="0149", departure="17:31", arrival="18:18")])
+    manager.has_later_trains.return_value = False
     factory = Mock(return_value=manager)
     monkeypatch.setattr(cli, "BookingSessionManager", factory)
     result = runner.invoke(cli.app, BOOKING_ARGS + extra_args, input="human\n")
     assert result.exit_code == 0, result.output
     assert str(tmp_path / "captcha.png") in result.output
     assert "0149" in result.output
-    manager.submit_captcha.assert_called_once_with("session", "human")
+    manager.submit_captcha.assert_called_once_with("session", "human", retain_on_success=True)
     manager.__exit__.assert_called_once()
     factory.assert_called_once_with(
         headless=False, chrome=chrome, compatibility=compatibility,
     )
+
+
+def test_booking_cli_lists_later_trains_only_after_yes(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+
+    from thsr_watcher.booking_models import BookingSearchResult, BookingSearchStatus, BookingSessionStarted
+
+    manager = MagicMock()
+    manager.__enter__.return_value = manager
+    now = datetime.now(timezone.utc)
+    manager.start_search.return_value = BookingSessionStarted(
+        session_id="session", captcha_path=tmp_path / "captcha.png", started_at=now, expires_at=now,
+    )
+    first = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[Train(number="0149", departure="17:31", arrival="18:18")])
+    later = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[
+        Train(number="0149", departure="17:31", arrival="18:18"),
+        Train(number="0803", departure="18:05", arrival="19:00"),
+    ])
+    manager.submit_captcha.return_value = first
+    manager.has_later_trains.return_value = True
+    manager.load_later_trains.return_value = later
+    monkeypatch.setattr(cli, "BookingSessionManager", Mock(return_value=manager))
+    declined = runner.invoke(cli.app, BOOKING_ARGS, input="human\nn\n")
+    assert declined.exit_code == 0, declined.output
+    assert "0149" in declined.output and "0803" not in declined.output
+    assert "List later bookable trains?" in declined.output
+    manager.load_later_trains.assert_not_called()
+
+    accepted = runner.invoke(cli.app, BOOKING_ARGS, input="human\ny\n")
+    assert accepted.exit_code == 0, accepted.output
+    assert "0803" in accepted.output
+    manager.load_later_trains.assert_called_once_with("session")
 
 
 def test_booking_cli_prompts_again_only_while_attempts_remain(monkeypatch, tmp_path):
@@ -180,6 +214,8 @@ def test_book_uses_preset_without_asking_for_it(monkeypatch, tmp_path):
     )
     train = Train(number="0149", departure="17:31", arrival="18:18")
     manager.submit_captcha.return_value = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[train])
+    manager.has_earlier_trains.return_value = False
+    manager.can_step_later.return_value = False
     manager.select_train.return_value = train
     manager.submit_reservation.return_value = ReservationResult(
         status=ReservationStatus.CONFIRMED, reservation_code="AB12CD34",
@@ -196,6 +232,47 @@ def test_book_uses_preset_without_asking_for_it(monkeypatch, tmp_path):
     manager.submit_captcha.assert_called_once_with("session", "human", retain_on_success=True)
     manager.submit_reservation.assert_called_once_with("session", pickup)
     factory.assert_called_once_with(headless=False, chrome=False, compatibility=False, ttl=cli.BOOKING_TTL)
+
+
+def test_book_steps_one_page_and_selects_only_that_page(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+
+    from thsr_watcher.booking_models import (
+        BookingSearchResult, BookingSearchStatus, BookingSessionStarted, PickupDetails, ReservationResult,
+        ReservationStatus,
+    )
+
+    pickup = PickupDetails(document_type="national_id", document_number="A123456789", mobile="0912345678")
+    monkeypatch.setattr(cli, "load_preset", Mock(return_value=pickup))
+    manager = MagicMock()
+    manager.__enter__.return_value = manager
+    now = datetime.now(timezone.utc)
+    manager.start_search.return_value = BookingSessionStarted(
+        session_id="session", captcha_path=tmp_path / "captcha.png", started_at=now, expires_at=now,
+    )
+    first = Train(number="0149", departure="17:31", arrival="18:18")
+    later = Train(number="0803", departure="18:05", arrival="19:00")
+    manager.submit_captcha.return_value = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[first])
+    manager.has_earlier_trains.return_value = False
+    manager.can_step_later.side_effect = [True, False]
+    manager.step_trains.return_value = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[later])
+    manager.select_train.return_value = later
+    manager.submit_reservation.return_value = ReservationResult(
+        status=ReservationStatus.CONFIRMED, reservation_code="AB12CD34",
+        message="Reservation confirmed. No payment was made.",
+    )
+    monkeypatch.setattr(cli, "BookingSessionManager", Mock(return_value=manager))
+    result = runner.invoke(
+        cli.app, ["book", "--from", "台北", "--to", "台中", "--date", "2026-09-15", "--after", "17:00"],
+        input="human\nl\n0803\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Return to the page that lists a train" in result.output
+    assert "0803" in result.output
+    manager.load_later_trains.assert_not_called()
+    manager.step_trains.assert_called_once_with("session", "later")
+    manager.select_train.assert_called_once_with("session", "0803")
 
 
 def test_book_reports_uncertain_without_another_prompt(monkeypatch, tmp_path):
@@ -217,6 +294,8 @@ def test_book_reports_uncertain_without_another_prompt(monkeypatch, tmp_path):
     )
     train = Train(number="0149", departure="17:31", arrival="18:18")
     manager.submit_captcha.return_value = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[train])
+    manager.has_earlier_trains.return_value = False
+    manager.can_step_later.return_value = False
     manager.select_train.return_value = train
     manager.submit_reservation.return_value = ReservationResult(
         status=ReservationStatus.UNCERTAIN,

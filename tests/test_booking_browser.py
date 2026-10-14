@@ -349,6 +349,265 @@ def test_train_radios_are_parsed_without_clicking_them(browser_setup):
     assert [key for key, value in locators.items() if value.click.called] == ["#SubmitButton"]
 
 
+def test_later_result_pages_are_included_without_another_search(browser_setup):
+    _, _, _, page, locators, request = browser_setup
+    pages = [
+        {"trains": [
+            {"code": "0845", "departure": "17:00", "arrival": "18:15", "label": ""},
+            {"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""},
+        ], "pager": {"kind": "uikit", "hasNext": True, "active": "1"}},
+        {"trains": [
+            {"code": "0803", "departure": "18:05", "arrival": "19:00", "label": ""},
+        ], "pager": {"kind": "uikit", "hasNext": False, "active": "2"}},
+    ]
+
+    def wait(script, **kwargs):
+        result = Mock()
+        if script == adapter._SCAN_JS:
+            result.json_value.return_value = pages.pop(0)
+        return result
+
+    page.wait_for_function.side_effect = wait
+    locators[adapter.RESULT_NEXT].count.return_value = 1
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        result = manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        later = manager.load_later_trains(started.session_id)
+        retained = manager._sessions[started.session_id]
+    assert result.status == Status.SUCCESS
+    assert [train.number for train in result.trains] == ["0149"]
+    assert later.status == Status.SUCCESS
+    assert [train.number for train in later.trains] == ["0149", "0803"]
+    locators[adapter.RESULT_NEXT].click.assert_called_once_with(no_wait_after=True)
+    locators["#SubmitButton"].click.assert_called_once()
+    assert not any(value.check.called for value in locators.values())
+    assert retained.browser._train_page["0803"] == "2"
+
+
+def test_later_train_button_is_followed_in_the_same_search(browser_setup):
+    _, _, _, page, locators, request = browser_setup
+    pages = [
+        {"trains": [
+            {"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""},
+        ], "pager": {"kind": "later", "hasNext": True, "active": ""}},
+        {"trains": [
+            {"code": "0803", "departure": "18:05", "arrival": "19:00", "label": ""},
+        ], "pager": {"kind": "none", "hasNext": False, "active": ""}},
+    ]
+
+    def wait(script, **kwargs):
+        result = Mock()
+        if script == adapter._SCAN_JS:
+            result.json_value.return_value = pages.pop(0)
+        return result
+
+    later = Mock()
+    later.count.return_value = 1
+    later.is_visible.return_value = False
+
+    def get_by_role(role, name=None, **kwargs):
+        if role == "button" and getattr(name, "pattern", None) == adapter.LATER_TRAINS.pattern:
+            return later
+        hidden = Mock()
+        hidden.is_visible.return_value = False
+        hidden.count.return_value = 0
+        return hidden
+
+    page.wait_for_function.side_effect = wait
+    page.get_by_role.side_effect = get_by_role
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        result = manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        loaded = manager.load_later_trains(started.session_id)
+        retained = manager._sessions[started.session_id]
+    assert result.status == Status.SUCCESS
+    assert [train.number for train in result.trains] == ["0149"]
+    assert loaded.status == Status.SUCCESS
+    assert [train.number for train in loaded.trains] == ["0149", "0803"]
+    later.click.assert_called_once_with(no_wait_after=True)
+    locators["#SubmitButton"].click.assert_called_once()
+    assert retained.browser._result_nav == "later"
+    assert retained.browser._train_page == {"0149": "0", "0803": "1"}
+    assert retained.browser._result_page_index == 1
+
+
+def test_step_result_page_replaces_the_list_with_one_page(browser_setup):
+    _, _, _, page, _, request = browser_setup
+    pages = [
+        {"trains": [
+            {"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""},
+        ], "pager": {"kind": "later", "hasNext": True, "hasEarlier": False, "active": ""}},
+        {"trains": [
+            {"code": "0803", "departure": "18:05", "arrival": "19:00", "label": ""},
+        ], "pager": {"kind": "later", "hasNext": True, "hasEarlier": True, "active": ""}},
+        {"trains": [
+            {"code": "0999", "departure": "19:05", "arrival": "20:00", "label": ""},
+        ], "pager": {"kind": "none", "hasNext": False, "hasEarlier": True, "active": ""}},
+    ]
+
+    def wait(script, **kwargs):
+        result = Mock()
+        if script == adapter._SCAN_JS:
+            result.json_value.return_value = pages.pop(0)
+        return result
+
+    later = Mock()
+    later.count.return_value = 1
+
+    def get_by_role(role, name=None, **kwargs):
+        if role == "button" and getattr(name, "pattern", None) == adapter.LATER_TRAINS.pattern:
+            return later
+        hidden = Mock()
+        hidden.is_visible.return_value = False
+        hidden.count.return_value = 0
+        return hidden
+
+    page.wait_for_function.side_effect = wait
+    page.get_by_role.side_effect = get_by_role
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        stepped = manager.step_trains(started.session_id, "later")
+        retained = manager._sessions[started.session_id]
+    assert stepped.status == Status.SUCCESS
+    assert [train.number for train in stepped.trains] == ["0803"]
+    assert [train.number for train in retained.trains] == ["0803"]
+    assert retained.browser.has_earlier_results() is True
+    assert retained.browser.can_step_later() is True
+    later.click.assert_called_once_with(no_wait_after=True)
+    assert len(pages) == 1
+
+
+@pytest.mark.parametrize("action", ["step", "load"])
+@pytest.mark.parametrize("surface", ["panel", "body"])
+def test_paged_timeout_is_not_reported_as_bookable(browser_setup, action, surface):
+    _, _, _, page, locators, request = browser_setup
+    pages = [
+        {"trains": [
+            {"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""},
+        ], "pager": {"kind": "later", "hasNext": True, "hasEarlier": False, "active": ""}},
+        {"trains": [
+            {"code": "0803", "departure": "18:05", "arrival": "19:00", "label": ""},
+        ], "pager": {"kind": "later", "hasNext": False, "hasEarlier": True, "active": ""}},
+    ]
+
+    def wait(script, **kwargs):
+        result = Mock()
+        if script == adapter._SCAN_JS:
+            if len(pages) == 1:
+                if surface == "panel":
+                    locators[adapter.FEEDBACK].all_inner_texts.return_value = ["連線逾時"]
+                else:
+                    locators["body"].inner_text.return_value = "車次列表 連線逾時，請重新操作"
+            result.json_value.return_value = pages.pop(0)
+        return result
+
+    later = Mock()
+    later.count.return_value = 1
+
+    def get_by_role(role, name=None, **kwargs):
+        if role == "button" and getattr(name, "pattern", None) == adapter.LATER_TRAINS.pattern:
+            return later
+        hidden = Mock()
+        hidden.is_visible.return_value = False
+        hidden.count.return_value = 0
+        return hidden
+
+    page.wait_for_function.side_effect = wait
+    page.get_by_role.side_effect = get_by_role
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        opened = manager.step_trains(started.session_id, "later") if action == "step" else manager.load_later_trains(started.session_id)
+        retained = manager._sessions[started.session_id]
+    assert opened.status == Status.UNKNOWN_ERROR
+    assert opened.trains == []
+    assert "連線逾時" in opened.message
+    assert [train.number for train in retained.trains] == ["0149"]
+
+
+def test_unrecognized_result_pager_does_not_return_a_partial_list(browser_setup):
+    _, _, _, page, locators, request = browser_setup
+    page.wait_for_function.return_value.json_value.return_value = {"trains": [
+        {"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""},
+    ], "pager": {"kind": "unknown", "hasNext": False, "active": ""}}
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        result = manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        later = manager.load_later_trains(started.session_id)
+    assert result.status == Status.SUCCESS
+    assert [train.number for train in result.trains] == ["0149"]
+    assert later.status == Status.UNKNOWN_ERROR
+    assert later.trains == []
+    assert "pagination was not recognized" in later.message
+    assert locators[adapter.RESULT_NEXT].click.called is False
+
+
+def test_next_result_page_timeout_does_not_return_a_partial_list(browser_setup):
+    _, _, _, page, locators, request = browser_setup
+    scans = {"n": 0}
+
+    def wait(script, **kwargs):
+        if script != adapter._SCAN_JS:
+            return Mock()
+        scans["n"] += 1
+        if scans["n"] > 1:
+            raise TimeoutError("next page")
+        result = Mock()
+        result.json_value.return_value = {"trains": [
+            {"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""},
+        ], "pager": {"kind": "uikit", "hasNext": True, "active": "1"}}
+        return result
+
+    page.wait_for_function.side_effect = wait
+    locators[adapter.RESULT_NEXT].count.return_value = 1
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        result = manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        later = manager.load_later_trains(started.session_id)
+    assert result.status == Status.SUCCESS
+    assert [train.number for train in result.trains] == ["0149"]
+    assert later.status == Status.UNKNOWN_ERROR
+    assert later.trains == []
+    assert "next result page did not appear" in later.message
+    locators[adapter.RESULT_NEXT].click.assert_called_once()
+
+
+@pytest.mark.parametrize("count,status,clicks", [
+    (10, Status.SUCCESS, 9),
+    (11, Status.UNKNOWN_ERROR, 9),
+    (12, Status.UNKNOWN_ERROR, 9),
+])
+def test_result_page_limit_includes_the_first_page(browser_setup, count, status, clicks):
+    _, _, _, page, locators, request = browser_setup
+    queued = [{
+        "trains": [{"code": str(1000 + index), "departure": "18:00", "arrival": "19:00", "label": ""}],
+        "pager": {"kind": "uikit", "hasNext": index < count - 1, "active": str(index + 1)},
+    } for index in range(count)]
+
+    def wait(script, **kwargs):
+        result = Mock()
+        if script == adapter._SCAN_JS:
+            result.json_value.return_value = queued.pop(0)
+        return result
+
+    page.wait_for_function.side_effect = wait
+    locators[adapter.RESULT_NEXT].count.return_value = 1
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        later = manager.load_later_trains(started.session_id)
+        retained = manager._sessions[started.session_id]
+    assert later.status == status
+    assert locators[adapter.RESULT_NEXT].click.call_count == clicks
+    if status == Status.SUCCESS:
+        assert len(later.trains) == 10
+    else:
+        assert later.trains == []
+        assert "read limit" in later.message
+        assert [train.number for train in retained.trains] == ["1000"]
+
+
 @pytest.mark.parametrize("hidden_text", ["驗證碼輸入錯誤", "連線逾時", "伺服器錯誤"])
 @pytest.mark.parametrize("has_trains", [True, False])
 def test_hidden_feedback_does_not_override_visible_outcome(browser_setup, hidden_text, has_trains):
@@ -780,6 +1039,38 @@ def test_select_train_checks_one_radio_and_one_confirm_button():
     radio.check.assert_called_once()
     confirm.click.assert_called_once()
     pickup.first.wait_for.assert_called_once()
+
+
+def test_select_train_does_not_leave_the_current_page():
+    browser = adapter.PlaywrightBookingBrowser()
+    page = MagicMock()
+    browser._page = page
+    browser._has_earlier = True
+    body = MagicMock()
+    body.inner_text.return_value = "車次列表"
+    radio = MagicMock()
+    radio.count.return_value = 0
+    earlier = MagicMock()
+    earlier.count.return_value = 1
+    challenge = MagicMock()
+    challenge.count.return_value = 0
+
+    def locator(selector):
+        if selector == "body":
+            return body
+        if "querycode" in selector:
+            found = MagicMock()
+            found.locator.return_value = radio
+            return found
+        if selector == '[data-thsr-watcher-earlier="1"]':
+            return earlier
+        return challenge
+
+    page.locator.side_effect = locator
+    with pytest.raises(BookingError, match="nothing was clicked"):
+        browser.select_train("0149")
+    earlier.click.assert_not_called()
+    radio.check.assert_not_called()
 
 
 def test_ga_exception_does_not_cover_documents_posts_or_other_scripts():

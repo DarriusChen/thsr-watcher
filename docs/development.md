@@ -88,9 +88,11 @@ not invoke them directly inside its event loop.
 
 `submit_captcha(..., retain_on_success=True)` keeps that same browser open after
 `SUCCESS` so `book` can select a train. The default remains to close. Retained
-sessions record the parsed trains. `select_train` clicks only a train number
-present exactly once in that list; any other number returns `NOT_SUBMITTED`
-without a click. `submit_reservation` accepts pickup details already loaded by
+sessions record the trains on the current result page. `step_trains` replaces
+that list with the adjacent page. `select_train` clicks only a train number
+present exactly once in the current page; any other number returns `NOT_SUBMITTED`
+without a click and tells the caller to return to the page that lists it.
+`submit_reservation` accepts pickup details already loaded by
 the caller, checks the local deadline again, submits once, and then closes the
 session. The `book` command uses a 10-minute local TTL.
 
@@ -157,8 +159,14 @@ result table with identifiable train/departure/arrival columns, or an explicit
 recognized no-matching-trains message. The parser preserves leading zeros and orders by
 departure time. It never clicks those radio inputs. A supported time slot is
 rounded down and the exact requested lower bound is applied locally to the
-returned rows. Only the displayed result set is returned; no pagination,
-additional searches, or inference that missing trains are sold out is performed.
+returned rows. The first result page is returned immediately. `booking-search` may then follow
+a recognized later-train control (`更晚車次`, or `ul.uk-pagination`, or a single
+下一頁 control inside navigation) through the remaining pages, at most 10,
+still inside that one search, and list them together. `book` moves only one
+page at a time, with `更早車次` or the same later control, and keeps only the
+page it landed on. An unrecognized pager, a page that does
+not change, or a page beyond that limit fails that later read. No additional
+search is submitted, and missing trains are not treated as sold out.
 The page's default one-way, standard-class, adult-only search is assumed.
 
 Explicit CAPTCHA-error text maps to `CAPTCHA_REJECTED`; recognized timeout/session

@@ -25,14 +25,18 @@ criteria, capture the CAPTCHA element, accept one human answer in the same live
 session, submit once per answer, and parse currently bookable trains. Only after
 THSR explicitly rejects the CAPTCHA may the same live session recapture a new
 CAPTCHA and accept another human answer, up to 3 answers per session in total;
-any other outcome ends the session. `booking-search` and diagnostics stop at
+any other outcome ends the session. After the first result page, it may read
+the remaining result pages in that same session and list them together.
+`booking-search` and diagnostics stop at
 train results: never select a train, enter pickup information, handle personal
 data, create a reservation, or pay.
 
-VS-03 `book` may continue one retained search session: select one train from
-that search's parsed results, fill pickup details from the local booking
-preset, check the same-ID membership box only when the preset says so, submit
-the reservation once, and report a confirmed code, an explicit rejection, or an
+VS-03 `book` may continue one retained search session: show one result page,
+move one page earlier or later when that control is present, and select one
+train from the page currently shown. It does not select a train from another
+page. It fills pickup details from the local booking
+preset, checks the same-ID membership box only when the preset says so, submits
+the reservation once, and reports a confirmed code, an explicit rejection, or an
 uncertain outcome. It does not log in, pay, or retry a reservation submission.
 Personal data may be stored only in the owner-only preset file, never in logs,
 diagnostics, or the CAPTCHA directory.

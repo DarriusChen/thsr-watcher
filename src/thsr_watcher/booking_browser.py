@@ -27,13 +27,22 @@ RESULT_TABLE = "table.result_table"
 # Live-observed result radios (2026-10-01): one per bookable train, inside
 # div.result-listing > span > label. The label shows only the two times.
 TRAIN_RADIO = 'input[type=radio][name="TrainQueryDataViewPanel:TrainGroup"]'
+# Same-session result pages only. A full service day fits in this bound;
+# exceeding it means the list is incomplete, so the search fails closed.
+MAX_RESULT_PAGES = 10
+RESULT_NEXT = (
+    'ul.uk-pagination li:not(.uk-disabled) a:has([uk-pagination-next]), '
+    'ul.uk-pagination li:not(.uk-disabled) button:has([uk-pagination-next])'
+)
+LATER_TRAINS = re.compile(r"^\s*更晚車次\s*$")
+EARLIER_TRAINS = re.compile(r"^\s*更早車次\s*$")
 CLOCK_TIME = r"\b(?:[01]\d|2[0-3]):[0-5]\d\b"
 COMPATIBILITY_ARGS = ["--disable-blink-features=AutomationControlled"]
 FEEDBACK = ".feedbackPanel, .feedbackPanelERROR, [role=alert], .alert-danger"
-# Reads train radios only; never clicks them. Attribute values are returned as
+# Reads train radios and the result pager. Attribute values are returned as
 # data, attribute names only so an unexpected markup change can be reported.
 _SCAN_JS = """
-({table, radio, feedback, patterns, staleOrigin}) => {
+({table, radio, feedback, patterns, staleOrigin, staleCodes}) => {
     if (staleOrigin !== null && performance.timeOrigin === staleOrigin) return null;
     const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
     const trains = Array.from(document.querySelectorAll(radio))
@@ -45,11 +54,85 @@ _SCAN_JS = """
             label: ((el.closest('label') || el.parentElement || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 200),
             attributeNames: Array.from(el.attributes).map(a => a.name).slice(0, 20)
         }));
+    const codes = trains.map(train => train.code || '').filter(Boolean).sort().join('|');
+    if (staleCodes !== null && codes === staleCodes) return null;
     const hasTableRadio = Array.from(document.querySelectorAll(table + ' input[type=radio]')).some(el => visible(el.closest('tr') || el));
     const hasFeedback = Array.from(document.querySelectorAll(feedback)).some(el => visible(el) && (el.innerText || '').trim());
     const hasPattern = new RegExp(patterns, 'i').test((document.body && document.body.innerText) || '');
     if (!trains.length && !hasTableRadio && !hasFeedback && !hasPattern) return null;
-    return {trains, hasTableRadio, hasFeedback, hasPattern};
+    const controlText = el => ((el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '')).replace(/\\s+/g, ' ').trim();
+    const enabled = el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && !el.closest('.uk-disabled, [aria-disabled="true"]');
+    const labeled = (word) => {
+        const nodes = Array.from(document.querySelectorAll('a, button, input, [role="button"], [role="link"], [class*="button"], [class*="btn"], span, div'))
+            .filter(el => visible(el) && enabled(el) && controlText(el).includes(word) && controlText(el).length <= 40);
+        return nodes.filter(el => !nodes.some(other => other !== el && el.contains(other)));
+    };
+    const markLabeled = (name, nodes) => {
+        document.querySelectorAll('[data-thsr-watcher-' + name + ']').forEach(node => node.removeAttribute('data-thsr-watcher-' + name));
+        if (nodes.length !== 1) return;
+        const target = nodes[0].closest('a, button, [role="button"], [role="link"]') || nodes[0];
+        target.setAttribute('data-thsr-watcher-' + name, '1');
+    };
+    const later = labeled('更晚車次');
+    const earlier = labeled('更早車次');
+    markLabeled('earlier', earlier);
+    let pager = {kind: 'none', hasNext: false, active: ''};
+    if (later.length === 1) {
+        markLabeled('later', later);
+        pager = {kind: 'later', hasNext: true, active: ''};
+    } else if (later.length > 1) {
+        pager = {kind: 'unknown', hasNext: false, active: ''};
+    } else if (Array.from(document.querySelectorAll('a, button, input, [role="button"], [role="link"]')).some(el =>
+        visible(el) && !enabled(el) && /^\\s*更晚車次\\s*$/.test(controlText(el))
+    )) {
+        pager = {kind: 'later', hasNext: false, active: ''};
+    } else if ((document.body.innerText || '').includes('更晚車次')) {
+        pager = {kind: 'unknown', hasNext: false, active: ''};
+    } else {
+        const pagerRoot = document.querySelector('ul.uk-pagination');
+        if (pagerRoot) {
+            const items = Array.from(pagerRoot.querySelectorAll(':scope > li'));
+            const active = items.find(li => li.classList.contains('uk-active'));
+            const activeText = active ? (active.innerText || '').replace(/\\s+/g, ' ').trim() : '';
+            const nextItem = items.find(li => li.querySelector('[uk-pagination-next]'));
+            if (nextItem) {
+                const control = nextItem.querySelector('a,button');
+                const nextEnabled = !nextItem.classList.contains('uk-disabled') && control && visible(control);
+                pager = nextItem.classList.contains('uk-disabled')
+                    ? {kind: 'uikit', hasNext: false, active: activeText}
+                    : nextEnabled
+                        ? {kind: 'uikit', hasNext: true, active: activeText}
+                        : {kind: 'unknown', hasNext: false, active: activeText};
+            } else if (active) {
+                const nextPage = items.slice(items.indexOf(active) + 1).find(li => {
+                    const text = (li.innerText || '').replace(/\\s+/g, ' ').trim();
+                    const control = li.querySelector('a,button');
+                    return /^[0-9]+$/.test(text) && !li.classList.contains('uk-disabled') && control && visible(control);
+                });
+                pager = nextPage
+                    ? {kind: 'number', hasNext: true, active: activeText, target: (nextPage.innerText || '').replace(/\\s+/g, ' ').trim()}
+                    : {kind: 'uikit', hasNext: false, active: activeText};
+            } else {
+                pager = {kind: 'unknown', hasNext: false, active: activeText};
+            }
+        } else {
+            const valueText = el => ((el.innerText || el.value || '')).replace(/\\s+/g, ' ').trim();
+            const valueLater = Array.from(document.querySelectorAll('a, button, input[type="button"], input[type="submit"]')).filter(el =>
+                visible(el) && /^\\s*更晚車次\\s*$/.test(valueText(el)) && !el.disabled
+                && el.getAttribute('aria-disabled') !== 'true' && !el.closest('.uk-disabled, [aria-disabled="true"]'));
+            if (valueLater.length === 1) pager = {kind: 'later', hasNext: true, active: ''};
+            else if (valueLater.length > 1) pager = {kind: 'unknown', hasNext: false, active: ''};
+            else {
+                const nexts = Array.from(document.querySelectorAll(
+                    'nav a, nav button, [class*=pagination] a, [class*=pagination] button, [class*=pager] a, [class*=pager] button'
+                )).filter(el => visible(el) && /^\\s*下一頁\\s*$/.test(el.innerText || '') && !el.disabled && !el.closest('[aria-disabled="true"], .uk-disabled'));
+                if (nexts.length === 1) pager = {kind: 'text', hasNext: true, active: ''};
+                else if (nexts.length > 1) pager = {kind: 'unknown', hasNext: false, active: ''};
+            }
+        }
+    }
+    pager.hasEarlier = earlier.length === 1;
+    return {trains, hasTableRadio, hasFeedback, hasPattern, pager};
 }
 """
 REJECTED = r"(驗證碼|檢測碼).{0,16}(錯誤|不正確|有誤)|invalid captcha|incorrect verification code"
@@ -262,6 +345,14 @@ class PlaywrightBookingBrowser:
         self._attempts = 0
         self._request_errors: list[str] = []
         self._dialogs: list[str] = []
+        # Result-page label for each train while booking-search reads later pages.
+        self._train_page: dict[str, str] = {}
+        self._result_nav = ""
+        self._result_page_index = 0
+        self._listed: list[Train] = []
+        self._more_results = False
+        self._has_earlier = False
+        self._pending_pager: dict = {}
 
     def _check_access(self) -> None:
         assert self._page is not None
@@ -525,18 +616,13 @@ class PlaywrightBookingBrowser:
         self._attempts += 1
         self._stage = "filling CAPTCHA"
         page.locator('[name="homeCaptcha:securityCode"]').fill(captcha_text)
-        # This selector belongs only to the search form. No result-page control
-        # is ever clicked, including train radios and the Pickup Information step.
+        # This selector belongs only to the search form. Result-page clicks are
+        # limited to a recognized next-page control; train radios stay untouched.
         self._stage = "submitting search form"
         page.locator("#SubmitButton").click(no_wait_after=True)
         self._stage = "waiting for train results or explicit error"
         try:
-            found = page.wait_for_function(
-                _SCAN_JS,
-                arg={"table": RESULT_TABLE, "radio": TRAIN_RADIO, "feedback": FEEDBACK,
-                     "patterns": f"{REJECTED}|{EXPIRED}|{EMPTY}", "staleOrigin": stale_origin},
-                timeout=TIMEOUT_MS,
-            ).json_value()
+            found = self._wait_for_scan(stale_origin=stale_origin)
         except Exception:
             self._check_access()
             text = "\n".join(self._dialogs)
@@ -547,9 +633,7 @@ class PlaywrightBookingBrowser:
                 return error
             raise
         self._check_access()
-        feedback = "\n".join(
-            self._dialogs + page.locator(FEEDBACK).filter(visible=True).all_inner_texts()
-        )
+        feedback = self._visible_feedback()
         result = feedback_result(feedback)
         if result and result.status != Status.SUCCESS:
             return result
@@ -559,29 +643,290 @@ class PlaywrightBookingBrowser:
         if body_result and body_result.status != Status.SUCCESS:
             return body_result
         self._stage = "parsing train results"
-        radios = found.get("trains") if isinstance(found, dict) else None
-        table = page.locator(RESULT_TABLE).filter(visible=True)
-        rows = table.locator("tr").filter(
-            visible=True, has=page.locator('input[type="radio"]:enabled'),
-        )
-        if radios:
-            trains = parse_train_radios(radios)
-        elif rows.count():
-            headers = table.locator("tr").filter(
-                visible=True, has=page.locator("th"),
-            ).first.locator("th, td").all_inner_texts()
-            data = [row.locator("td").all_inner_texts() for row in rows.all()]
-            trains = parse_train_rows(headers, data)
-        elif result or body_result:
-            return result or body_result
+        trains = self._collect_result_pages(found, empty_result=result or body_result, follow=False)
+        return self._bookable_trains(trains)
+
+    def _scan_arg(self, *, stale_origin: float | None, stale_codes: str | None) -> dict:
+        return {
+            "table": RESULT_TABLE, "radio": TRAIN_RADIO, "feedback": FEEDBACK,
+            "patterns": f"{REJECTED}|{EXPIRED}|{EMPTY}",
+            "staleOrigin": stale_origin, "staleCodes": stale_codes,
+        }
+
+    def _wait_for_scan(self, *, stale_origin: float | None = None, stale_codes: str | None = None) -> dict:
+        assert self._page is not None
+        return self._page.wait_for_function(
+            _SCAN_JS, arg=self._scan_arg(stale_origin=stale_origin, stale_codes=stale_codes),
+            timeout=TIMEOUT_MS,
+        ).json_value()
+
+    def _collect_result_pages(
+        self, found: dict, empty_result: BookingSearchResult | None, *, follow: bool,
+    ) -> list[Train]:
+        """Read the current result page. Later pages are read only when follow is set."""
+        if not follow:
+            self._train_page = {}
+            self._result_nav = ""
+            self._result_page_index = 0
+            self._listed = []
+            self._more_results = False
+            self._has_earlier = False
+            self._pending_pager = {}
+        collected: list[Train] = [] if not follow else list(self._listed)
+        seen_codes: list[str] = []
+        page_offset = 0 if not follow else self._result_page_index + 1
+        for _ in range(MAX_RESULT_PAGES - page_offset):
+            if not isinstance(found, dict):
+                found = {}
+            self._reject_result_page_errors()
+            page_trains = self._parse_visible_trains(found, empty_result)
+            if page_trains is None:
+                self._listed = []
+                return []
+            signature = "|".join(sorted(train.number for train in page_trains))
+            if signature in seen_codes:
+                raise BookingError("Result page did not change; availability is unknown")
+            seen_codes.append(signature)
+            pager = found.get("pager") or {}
+            page_index = page_offset + len(seen_codes) - 1
+            if pager.get("kind") == "later":
+                self._result_nav = "later"
+            label = str(page_index if self._result_nav == "later" else (pager.get("active") or len(seen_codes)))
+            self._result_page_index = page_index
+            for train in page_trains:
+                previous = next((item for item in collected if item.number == train.number), None)
+                if previous is not None and previous != train:
+                    raise BookingError("The same train number had conflicting times; availability is unknown")
+                if previous is None:
+                    collected.append(train)
+                    self._train_page[train.number] = label
+            if pager.get("kind") == "unknown":
+                return self._record_unrecognized_pager(pager, collected, follow=follow)
+            if not pager.get("hasNext"):
+                refreshed = self._refresh_later_page()
+                refreshed_pager = (refreshed or {}).get("pager") or {}
+                if refreshed_pager.get("hasNext"):
+                    pager = refreshed_pager
+                elif refreshed_pager.get("kind") == "unknown":
+                    return self._record_unrecognized_pager(refreshed_pager, collected, follow=follow)
+            self._remember_page(pager, collected, more=bool(pager.get("hasNext")))
+            if not follow or not pager.get("hasNext"):
+                return collected
+            self._stop_at_result_page_limit()
+            found = self._read_next_result_page(pager, signature)
+            empty_result = None
+        raise BookingError("Result pages exceeded the read limit; availability is unknown")
+
+    def _stop_at_result_page_limit(self) -> None:
+        """The first result page counts. Do not open another page past the cap."""
+        if self._result_page_index + 1 < MAX_RESULT_PAGES:
+            return
+        raise BookingError("Result pages exceeded the read limit; availability is unknown")
+
+    def has_later_results(self) -> bool:
+        return self._more_results
+
+    def has_earlier_results(self) -> bool:
+        return self._has_earlier
+
+    def can_step_later(self) -> bool:
+        """Whether book can open the next page with one recognized control."""
+        pager = self._pending_pager
+        return pager.get("kind") in {"later", "uikit", "number", "text"} and bool(pager.get("hasNext"))
+
+    def step_result_page(self, direction: str) -> BookingSearchResult:
+        """Open one adjacent result page and return only the trains shown there."""
+        if direction not in {"earlier", "later"}:
+            raise BookingError("Result page direction was not recognized; nothing was clicked.")
+        if self._page is None:
+            raise BookingError("Session is closed; the result page was not changed.")
+        if direction == "later" and not self.can_step_later():
+            raise BookingError("There is no later result page; nothing was clicked.")
+        if direction == "earlier" and not self._has_earlier:
+            raise BookingError("There is no earlier result page; nothing was clicked.")
+        signature = "|".join(sorted(train.number for train in self._listed))
+        if direction == "later":
+            found = self._read_next_result_page(dict(self._pending_pager), signature)
         else:
-            raise BookingError("No recognizable selectable train results")
+            found = self._read_earlier_result_page(signature)
+        trains = self._collect_result_pages(found, empty_result=None, follow=False)
+        return self._bookable_trains(trains)
+
+    def load_later_trains(self) -> BookingSearchResult:
+        """Read the remaining result pages after the user asks for them."""
+        if self._page is None:
+            raise BookingError("Session is closed; later trains were not read.")
+        if not self._more_results:
+            trains = list(self._listed)
+        else:
+            pager = dict(self._pending_pager)
+            if pager.get("kind") == "unknown" or not pager.get("hasNext"):
+                raise BookingError("Result pagination was not recognized; availability is unknown")
+            signature = "|".join(sorted(train.number for train in self._listed))
+            self._stop_at_result_page_limit()
+            found = self._read_next_result_page(pager, signature)
+            trains = self._collect_result_pages(found, empty_result=None, follow=True)
+        return self._bookable_trains(trains)
+
+    def _bookable_trains(self, trains: list[Train]) -> BookingSearchResult:
         assert self._request is not None
         return BookingSearchResult(
             status=Status.SUCCESS,
             trains=[train for train in trains if train.departure >= self._request.after],
             message="Currently presented as bookable in this search; no reservation has been created.",
         )
+
+    def _record_unrecognized_pager(
+        self, pager: dict, collected: list[Train], *, follow: bool,
+    ) -> list[Train]:
+        """Keep trains already read. An unrecognized pager is not followed."""
+        self._remember_page(pager, collected, more=True)
+        if follow:
+            raise BookingError("Result pagination was not recognized; availability is unknown")
+        return collected
+
+    def _read_next_result_page(self, pager: dict, signature: str) -> dict:
+        self._open_next_result_page(pager)
+        self._stage = "reading the next result page"
+        try:
+            found = self._wait_for_scan(stale_codes=signature)
+        except BookingError:
+            raise
+        except Exception as exc:
+            self._check_access()
+            raise BookingError("The next result page did not appear; availability is unknown") from exc
+        self._check_access()
+        return found
+
+    def _read_earlier_result_page(self, signature: str) -> dict:
+        control = self._named_result_control(EARLIER_TRAINS)
+        if control.count() != 1:
+            raise BookingError("Result previous page was not a single control; availability is unknown")
+        self._check_access()
+        control.click(no_wait_after=True)
+        self._stage = "reading the previous result page"
+        try:
+            found = self._wait_for_scan(stale_codes=signature)
+        except BookingError:
+            raise
+        except Exception as exc:
+            self._check_access()
+            raise BookingError("The previous result page did not appear; availability is unknown") from exc
+        self._check_access()
+        return found
+
+    def _remember_page(self, pager: dict, collected: list[Train], *, more: bool) -> None:
+        self._pending_pager = dict(pager)
+        self._more_results = more
+        self._has_earlier = bool(pager.get("hasEarlier"))
+        self._listed = list(collected)
+
+    def _refresh_later_page(self) -> dict | None:
+        """Re-read the page if 更晚車次 appears after the first train paint."""
+        assert self._page is not None
+        try:
+            self._page.wait_for_function(
+                "() => (document.body && document.body.innerText || '').includes('更晚車次')",
+                timeout=3_000,
+            )
+        except Exception:
+            return None
+        try:
+            found = self._wait_for_scan()
+        except Exception:
+            return None
+        return found if isinstance(found, dict) else None
+
+    def _reject_result_page_errors(self) -> None:
+        """Do not treat a page that reports an error as bookable trains."""
+        self._check_access()
+        feedback = self._visible_feedback()
+        classified = feedback_result(feedback)
+        assert self._page is not None
+        body_result = feedback_result(self._page.locator("body").inner_text())
+        if classified and classified.status != Status.SUCCESS:
+            raise BookingError(classified.message)
+        if feedback.strip() and classified is None:
+            raise BookingError("THSR reported: " + feedback.strip())
+        if body_result and body_result.status != Status.SUCCESS:
+            raise BookingError(body_result.message)
+
+    def _visible_feedback(self) -> str:
+        assert self._page is not None
+        return "\n".join(
+            self._dialogs + self._page.locator(FEEDBACK).filter(visible=True).all_inner_texts()
+        )
+
+    def _parse_visible_trains(self, found: dict, empty_result: BookingSearchResult | None) -> list[Train] | None:
+        """Return the visible trains, or None when THSR explicitly reported none."""
+        assert self._page is not None
+        page = self._page
+        radios = found.get("trains") if isinstance(found, dict) else None
+        table = page.locator(RESULT_TABLE).filter(visible=True)
+        rows = table.locator("tr").filter(
+            visible=True, has=page.locator('input[type="radio"]:enabled'),
+        )
+        if radios:
+            return parse_train_radios(radios)
+        if rows.count():
+            if (found.get("pager") or {}).get("hasNext"):
+                raise BookingError("Result table pagination was not recognized; availability is unknown")
+            headers = table.locator("tr").filter(
+                visible=True, has=page.locator("th"),
+            ).first.locator("th, td").all_inner_texts()
+            data = [row.locator("td").all_inner_texts() for row in rows.all()]
+            return parse_train_rows(headers, data)
+        if empty_result:
+            return None
+        raise BookingError("No recognizable selectable train results")
+
+    def _open_next_result_page(self, pager: dict) -> None:
+        assert self._page is not None
+        page = self._page
+        kind = pager.get("kind")
+        if kind == "uikit":
+            control = page.locator(RESULT_NEXT)
+        elif kind == "number":
+            target = str(pager.get("target") or "")
+            if not re.fullmatch(r"[0-9]+", target):
+                raise BookingError("Result pagination was not recognized; availability is unknown")
+            control = self._page_number_control(target)
+        elif kind == "text":
+            control = page.get_by_role("link", name=re.compile(r"^\s*下一頁\s*$"))
+            if control.count() != 1:
+                control = page.get_by_role("button", name=re.compile(r"^\s*下一頁\s*$"))
+        elif kind == "later":
+            control = self._named_result_control(LATER_TRAINS)
+        else:
+            raise BookingError("Result pagination was not recognized; availability is unknown")
+        if control.count() != 1:
+            raise BookingError("Result next page was not a single control; availability is unknown")
+        self._check_access()
+        control.click(no_wait_after=True)
+
+    def _page_number_control(self, label: str):
+        assert self._page is not None
+        root = self._page.locator("ul.uk-pagination")
+        control = root.get_by_role("link", name=label, exact=True)
+        if control.count() != 1:
+            control = root.get_by_role("button", name=label, exact=True)
+        return control
+
+    def _named_result_control(self, name: re.Pattern):
+        assert self._page is not None
+        page = self._page
+        mark = '[data-thsr-watcher-later="1"]' if name.pattern == LATER_TRAINS.pattern else '[data-thsr-watcher-earlier="1"]'
+        control = page.locator(mark)
+        if control.count() == 1:
+            return control
+        control = page.get_by_role("button", name=name)
+        if control.count() != 1:
+            control = page.get_by_role("link", name=name)
+        return control
+
+    def _visible_train_radio(self, train_number: str):
+        assert self._page is not None
+        return self._page.locator(f'{TRAIN_RADIO}[querycode="{train_number}"]').locator("visible=true")
 
     def select_train(self, train_number: str) -> None:
         """Check one result radio and open the pickup form. Does not submit a reservation."""
@@ -591,7 +936,7 @@ class PlaywrightBookingBrowser:
             raise BookingError("Train is not in this search result; nothing was selected.")
         self._check_access()
         page = self._page
-        radio = page.locator(f'{TRAIN_RADIO}[querycode="{train_number}"]').locator("visible=true")
+        radio = self._visible_train_radio(train_number)
         if radio.count() != 1:
             raise BookingError("Selected train is not a single visible choice; nothing was clicked.")
         radio.check()

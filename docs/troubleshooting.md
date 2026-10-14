@@ -126,7 +126,12 @@ Review these selectors and assumptions when maintaining the browser integration:
   from the radio's `querycode` attribute (times from `querydeparture`/
   `queryarrival`, else the label), verified live on 2026-10-02. A radio
   without them fails with its attribute names listed. `booking-search` never
-  clicks radios; `book` checks the one train chosen by the user.
+  clicks radios. The first result page is returned immediately. A visible
+  `更晚車次` control, observed on 2026-10-14, or a recognized result pager
+  (`ul.uk-pagination` next or page number, or one 下一頁 control) is followed
+  only after the user asks for later trains, in the same session, and
+  `booking-search` lists those pages together. `book` moves one page with
+  `更早車次` or `更晚車次` and checks a radio only on the page currently shown.
   `table.result_table` remains as an older-markup parsing fallback; `book`
   requires a single visible `querycode` radio for selection.
 - Error containers: `.feedbackPanel`, `.feedbackPanelERROR`, `[role=alert]`,

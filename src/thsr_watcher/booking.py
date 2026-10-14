@@ -27,6 +27,11 @@ class BookingBrowser(Protocol):
     def start(self, request: BookingSearchRequest, captcha_path: Path) -> None: ...
     def submit(self, captcha_text: str) -> BookingSearchResult: ...
     def refresh_captcha(self, captcha_path: Path) -> None: ...
+    def has_later_results(self) -> bool: ...
+    def has_earlier_results(self) -> bool: ...
+    def can_step_later(self) -> bool: ...
+    def load_later_trains(self) -> BookingSearchResult: ...
+    def step_result_page(self, direction: str) -> BookingSearchResult: ...
     def select_train(self, train_number: str) -> None: ...
     def submit_reservation(self, pickup: PickupDetails) -> ReservationResult: ...
     def close(self) -> None: ...
@@ -167,6 +172,80 @@ class BookingSessionManager:
             if not keep_open:
                 self.close_session(session_id)
 
+    def has_later_trains(self, session_id: str) -> bool:
+        """Whether this retained search is still showing a later-train control."""
+        session = self._open_result_session(session_id)
+        return session is not None and session.browser.has_later_results()
+
+    def has_earlier_trains(self, session_id: str) -> bool:
+        """Whether this retained search is still showing an earlier-train control."""
+        session = self._open_result_session(session_id)
+        return session is not None and session.browser.has_earlier_results()
+
+    def can_step_later(self, session_id: str) -> bool:
+        """Whether book can move to the next page with one recognized control."""
+        session = self._open_result_session(session_id)
+        return session is not None and session.browser.can_step_later()
+
+    def _open_result_session(self, session_id: str) -> _Session | None:
+        session = self._sessions.get(session_id)
+        if session is None or session.trains is None or self._clock() >= session.expires_at:
+            return None
+        return session
+
+    def load_later_trains(self, session_id: str) -> BookingSearchResult:
+        """Read later result pages in the retained search. Does not submit again."""
+        session = self._sessions.get(session_id)
+        if session is None or session.trains is None:
+            return BookingSearchResult(
+                status=BookingSearchStatus.SESSION_EXPIRED,
+                message="Session is unknown or already closed; explicitly start a new search.",
+            )
+        if self._clock() >= session.expires_at:
+            self.close_session(session_id)
+            return BookingSearchResult(
+                status=BookingSearchStatus.SESSION_EXPIRED,
+                message="Local session deadline elapsed; later trains were not read.",
+            )
+        try:
+            result = session.browser.load_later_trains()
+        except BookingError as exc:
+            return BookingSearchResult(status=BookingSearchStatus.UNKNOWN_ERROR, message=str(exc))
+        except Exception:
+            return BookingSearchResult(
+                status=BookingSearchStatus.UNKNOWN_ERROR,
+                message="Browser or parser failed; availability is unknown. No retry was attempted.",
+            )
+        session.trains = list(result.trains)
+        return result
+
+    def step_trains(self, session_id: str, direction: str) -> BookingSearchResult:
+        """Replace the retained list with one adjacent result page. Does not submit again."""
+        session = self._sessions.get(session_id)
+        if session is None or session.trains is None:
+            return BookingSearchResult(
+                status=BookingSearchStatus.SESSION_EXPIRED,
+                message="Session is unknown or already closed; explicitly start a new search.",
+            )
+        if self._clock() >= session.expires_at:
+            self.close_session(session_id)
+            return BookingSearchResult(
+                status=BookingSearchStatus.SESSION_EXPIRED,
+                message="Local session deadline elapsed; the result page was not changed.",
+            )
+        try:
+            result = session.browser.step_result_page(direction)
+        except BookingError as exc:
+            return BookingSearchResult(status=BookingSearchStatus.UNKNOWN_ERROR, message=str(exc))
+        except Exception:
+            return BookingSearchResult(
+                status=BookingSearchStatus.UNKNOWN_ERROR,
+                message="Browser or parser failed; availability is unknown. No retry was attempted.",
+            )
+        session.trains = list(result.trains)
+        session.selected = None
+        return result
+
     def select_train(self, session_id: str, train_number: str) -> Train | ReservationResult:
         """Open the pickup form for one parsed train, or report that nothing was submitted."""
         session = self._retained_session(session_id)
@@ -182,7 +261,10 @@ class BookingSessionManager:
         if len(matches) != 1:
             return ReservationResult(
                 status=ReservationStatus.NOT_SUBMITTED,
-                message="Train is not in this search result; nothing was selected.",
+                message=(
+                    "Train is not on this page. Return to the page that lists it before selecting. "
+                    "Nothing was selected."
+                ),
             )
         try:
             session.browser.select_train(train_number)

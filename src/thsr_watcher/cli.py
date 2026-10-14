@@ -92,16 +92,18 @@ def booking_search(
             headless=headless, chrome=chrome, compatibility=compatibility,
         ) as manager:
             session = manager.start_search(request)
-            result = _captcha_handoff(manager, session)
+            result = _captcha_handoff(manager, session, retain=True)
+            if result.status != BookingSearchStatus.SUCCESS:
+                typer.echo(f"{result.status.value}: {result.message}")
+                raise typer.Exit(1)
+            result = _maybe_list_later_trains(manager, session.session_id, result)
     except BookingError as exc:
         typer.echo(f"Booking search failed: {exc}", err=True)
         raise typer.Exit(1) from exc
-    typer.echo(f"{result.status.value}: {result.message}")
-    if result.status != BookingSearchStatus.SUCCESS:
-        raise typer.Exit(1)
-    for train in result.trains:
-        typer.echo(f"Train {train.number}   {train.departure:%H:%M} → {train.arrival:%H:%M}")
-    typer.echo(f"{len(result.trains)} currently bookable trains shown for the requested time. No train selected.")
+    typer.echo(
+        f"{len(result.trains)} currently bookable trains from {request.after:%H:%M} onward. "
+        "No train selected."
+    )
 
 
 @app.command("booking-manual-check")
@@ -134,6 +136,71 @@ def _captcha_handoff(manager: BookingSessionManager, session, *, retain: bool = 
         answer = typer.prompt("Enter CAPTCHA", hide_input=True)
         result = manager.submit_captcha(session.session_id, answer, **kwargs)
     return result
+
+
+def _print_trains(trains) -> None:
+    for train in trains:
+        typer.echo(f"Train {train.number}   {train.departure:%H:%M} → {train.arrival:%H:%M}")
+
+
+PAGE_NOTE = (
+    "Only trains on this page can be selected. "
+    "Return to the page that lists a train before choosing it."
+)
+
+
+def _page_prompt(earlier: bool, later: bool) -> str:
+    options = []
+    if earlier:
+        options.append("e earlier")
+    if later:
+        options.append("l later")
+    if not options:
+        return "Train number"
+    return "Enter " + ", ".join(options) + ", or a train number"
+
+
+def _choose_current_page(manager: BookingSessionManager, session_id: str, result):
+    """Show one result page at a time. e or l replaces that page."""
+    while True:
+        typer.echo(f"{result.status.value}: {result.message}")
+        _print_trains(result.trains)
+        earlier = manager.has_earlier_trains(session_id)
+        later = manager.can_step_later(session_id)
+        if not result.trains and not earlier and not later:
+            return None
+        typer.echo(PAGE_NOTE)
+        choice = typer.prompt(_page_prompt(earlier, later)).strip()
+        if choice.lower() in {"e", "l"}:
+            if (choice.lower() == "e" and not earlier) or (choice.lower() == "l" and not later):
+                typer.echo("That result page is not available.", err=True)
+                raise typer.Exit(2)
+            result = manager.step_trains(session_id, "earlier" if choice.lower() == "e" else "later")
+            if result.status != BookingSearchStatus.SUCCESS:
+                typer.echo(f"{result.status.value}: {result.message}")
+                raise typer.Exit(1)
+            continue
+        return choice
+
+
+def _maybe_list_later_trains(manager: BookingSessionManager, session_id: str, result):
+    """Show the current page, then read later pages only if the user asks."""
+    typer.echo(f"{result.status.value}: {result.message}")
+    _print_trains(result.trains)
+    if not manager.has_later_trains(session_id):
+        return result
+    choice = typer.prompt("List later bookable trains? [y/n]")
+    if choice not in {"y", "n"}:
+        typer.echo("Invalid choice: enter y or n", err=True)
+        raise typer.Exit(2)
+    if choice == "n":
+        return result
+    later = manager.load_later_trains(session_id)
+    typer.echo(f"{later.status.value}: {later.message}")
+    if later.status != BookingSearchStatus.SUCCESS:
+        raise typer.Exit(1)
+    _print_trains(later.trains)
+    return later
 
 
 preset_app = typer.Typer(help="Save, show, or clear the local booking preset.", invoke_without_command=True)
@@ -245,12 +312,11 @@ def book(
             result = _captcha_handoff(manager, session, retain=True)
             if result.status != BookingSearchStatus.SUCCESS:
                 _echo_search_failure(result)
-            if not result.trains:
+            train_number = _choose_current_page(manager, session.session_id, result)
+            if train_number is None:
                 typer.echo("No currently bookable trains shown. No reservation was submitted.")
                 return
-            for train in result.trains:
-                typer.echo(f"Train {train.number}   {train.departure:%H:%M} → {train.arrival:%H:%M}")
-            selected = manager.select_train(session.session_id, typer.prompt("Train number").strip())
+            selected = manager.select_train(session.session_id, train_number)
             if isinstance(selected, ReservationResult):
                 typer.echo(f"{selected.status.value}: {selected.message}")
                 raise typer.Exit(1)

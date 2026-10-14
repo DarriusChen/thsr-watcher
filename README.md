@@ -82,9 +82,12 @@ cleans up. `booking-search` has a local deadline of five minutes from the first
 CAPTCHA capture.
 
 Reservation searches (`booking-search` and `book`) assume one-way,
-standard-class travel with 1–10 adults. Only the displayed result set is returned,
-filtered by the requested earliest departure; there is no pagination.
-Missing trains must not be interpreted as sold out.
+standard-class travel with 1–10 adults. One search is submitted. The first
+result page is shown and filtered by the requested earliest departure. If a
+later-train control is present, the tool asks before reading the remaining
+pages in that same session. Missing trains must not be interpreted as sold out.
+If a later page cannot be read after you ask for it, the search fails instead
+of treating the first page as the full list.
 
 ## Local booking
 
@@ -108,9 +111,12 @@ membership requires a national ID.
 
 `book` reads that preset before opening a browser. It uses the same search
 options as `booking-search`, including `--compatibility`. After you answer the
-CAPTCHA and choose a train number from the list, it fills the preset and submits
-once. It does not ask for the document, mobile, membership choice, or a second
-confirmation. It never clicks payment.
+CAPTCHA, it shows one page of bookable trains. Enter `e` or `l` to move
+one page earlier or later when that control is present; the list is replaced by that page.
+Only trains on the current page can be selected. Return to the page that lists
+a train before choosing its number. It
+fills the preset and submits once. It does not ask for the document, mobile,
+membership choice, or a second confirmation. It never clicks payment.
 
 ```sh
 uv run thsr-watcher book \
