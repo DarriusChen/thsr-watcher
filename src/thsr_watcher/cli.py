@@ -17,7 +17,12 @@ from thsr_watcher.timetable import TimetableError, search_trains
 
 app = typer.Typer(help="THSR timetable search and human-assisted local booking.")
 BOOKING_TTL = timedelta(minutes=10)
-_DOCUMENT_TYPES = {"身分證": DocumentType.NATIONAL_ID, "護照": DocumentType.PASSPORT, "居留證": DocumentType.RESIDENCE_PERMIT}
+_DOCUMENT_TYPE_CODES = {
+    "1": DocumentType.NATIONAL_ID,
+    "2": DocumentType.PASSPORT,
+    "3": DocumentType.RESIDENCE_PERMIT,
+}
+_DOCUMENT_TYPE_LABELS = {"1": "身分證", "2": "護照", "3": "居留證"}
 
 
 @app.callback(invoke_without_command=True)
@@ -143,6 +148,11 @@ def _print_trains(trains) -> None:
         typer.echo(f"Train {train.number}   {train.departure:%H:%M} → {train.arrival:%H:%M}")
 
 
+def _print_numbered_trains(trains) -> None:
+    for index, train in enumerate(trains, start=1):
+        typer.echo(f"{index}  Train {train.number}   {train.departure:%H:%M} → {train.arrival:%H:%M}")
+
+
 PAGE_NOTE = (
     "Only trains on this page can be selected. "
     "Return to the page that lists a train before choosing it."
@@ -156,15 +166,25 @@ def _page_prompt(earlier: bool, later: bool) -> str:
     if later:
         options.append("l later")
     if not options:
-        return "Train number"
-    return "Enter " + ", ".join(options) + ", or a train number"
+        return "Enter a list number"
+    return "Enter " + ", ".join(options) + ", or a list number"
+
+
+def _train_number_for_choice(trains, choice: str) -> str:
+    """Map a 1-based list number on the current page to that train's number."""
+    if choice.isdigit():
+        index = int(choice)
+        if 1 <= index <= len(trains):
+            return trains[index - 1].number
+    typer.echo("Enter a list number.", err=True)
+    raise typer.Exit(2)
 
 
 def _choose_current_page(manager: BookingSessionManager, session_id: str, result):
     """Show one result page at a time. e or l replaces that page."""
     while True:
         typer.echo(f"{result.status.value}: {result.message}")
-        _print_trains(result.trains)
+        _print_numbered_trains(result.trains)
         earlier = manager.has_earlier_trains(session_id)
         later = manager.can_step_later(session_id)
         if not result.trains and not earlier and not later:
@@ -180,7 +200,7 @@ def _choose_current_page(manager: BookingSessionManager, session_id: str, result
                 typer.echo(f"{result.status.value}: {result.message}")
                 raise typer.Exit(1)
             continue
-        return choice
+        return _train_number_for_choice(result.trains, choice)
 
 
 def _maybe_list_later_trains(manager: BookingSessionManager, session_id: str, result):
@@ -232,9 +252,12 @@ def preset_clear() -> None:
 
 
 def _save_preset_from_prompts() -> None:
-    document_type = typer.prompt("Document type (身分證, 護照, or 居留證)")
-    if document_type not in _DOCUMENT_TYPES:
-        typer.echo("Invalid document type: choose 身分證, 護照, or 居留證", err=True)
+    typer.echo("Document type:")
+    for code, label in _DOCUMENT_TYPE_LABELS.items():
+        typer.echo(f"{code} {label}")
+    document_type = typer.prompt("Enter a document type number")
+    if document_type not in _DOCUMENT_TYPE_CODES:
+        typer.echo("Invalid document type: enter 1, 2, or 3", err=True)
         raise typer.Exit(2)
     document_number = typer.prompt("Document number", hide_input=True)
     mobile = typer.prompt("Mobile", hide_input=True)
@@ -245,7 +268,7 @@ def _save_preset_from_prompts() -> None:
         raise typer.Exit(2)
     try:
         details = PickupDetails(
-            document_type=_DOCUMENT_TYPES[document_type],
+            document_type=_DOCUMENT_TYPE_CODES[document_type],
             document_number=document_number,
             mobile=mobile,
             email=email,
@@ -255,7 +278,11 @@ def _save_preset_from_prompts() -> None:
         _echo_validation(exc)
         raise typer.Exit(2) from exc
     typer.echo(masked_summary(details))
-    if typer.prompt("Type yes to save this preset") != "yes":
+    save = typer.prompt("Save this preset? [y/n]")
+    if save not in {"y", "n"}:
+        typer.echo("Invalid choice: enter y or n", err=True)
+        raise typer.Exit(2)
+    if save != "y":
         typer.echo("Preset was not saved.")
         raise typer.Exit(1)
     try:

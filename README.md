@@ -101,20 +101,22 @@ uv run thsr-watcher book-preset show
 uv run thsr-watcher book-preset clear
 ```
 
-The prompts ask for a document type (身分證, 護照, or 居留證), document number,
-mobile, optional email, and whether to check 同取票人身分證字號. Document,
-mobile, and email input is hidden in the terminal. On the live
+The prompts ask for a document type number (`1` 身分證, `2` 護照, or `3` 居留證),
+document number, mobile, optional email, and whether to check 同取票人身分證字號.
+Document, mobile, and email input is hidden in the terminal. On the live
 form, 護照 and 居留證 share one document option. Membership checks 高鐵會員 TGo
 and then that checkbox. The site then asks to confirm the TGo account; the
-tool clicks 確定 once. It does not log in. Type `yes` to save. Checking
+tool clicks 確定 once. It does not log in. Enter `y` to save. Checking
 membership requires a national ID.
 
 `book` reads that preset before opening a browser. It uses the same search
 options as `booking-search`, including `--compatibility`. After you answer the
-CAPTCHA, it shows one page of bookable trains. Enter `e` or `l` to move
-one page earlier or later when that control is present; the list is replaced by that page.
-Only trains on the current page can be selected. Return to the page that lists
-a train before choosing its number. It
+CAPTCHA, it shows one page of bookable trains, numbered from 1. Enter that list
+number to select a train. Enter `e` or `l` to move one page earlier or later
+when that control is present; the list is replaced by that page and numbered
+again from 1. Only trains on the current page can be selected. Return to the
+page that lists a train before choosing its list number. Entering the train
+number does not select it. The command
 fills the preset and submits once. It does not ask for the document, mobile,
 membership choice, or a second confirmation. It never clicks payment.
 

@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from thsr_watcher import cli
@@ -162,7 +163,7 @@ def test_book_preset_saves_only_after_yes_and_masks_values(monkeypatch, tmp_path
 
     path = tmp_path / "booking-preset.json"
     monkeypatch.setattr(booking_preset, "default_preset_path", lambda: path)
-    saved = runner.invoke(cli.app, ["book-preset"], input="身分證\nA123456789\n0912345678\nprivate@example.com\nn\nyes\n")
+    saved = runner.invoke(cli.app, ["book-preset"], input="1\nA123456789\n0912345678\nprivate@example.com\nn\ny\n")
     assert saved.exit_code == 0, saved.output
     assert "A123456789" not in saved.output and "0912345678" not in saved.output
     assert "private@example.com" not in saved.output
@@ -179,10 +180,10 @@ def test_book_preset_rejects_bad_input_without_writing(monkeypatch, tmp_path):
 
     path = tmp_path / "booking-preset.json"
     monkeypatch.setattr(booking_preset, "default_preset_path", lambda: path)
-    declined = runner.invoke(cli.app, ["book-preset"], input="身分證\nA123456789\n0912345678\n\ny\nno\n")
+    declined = runner.invoke(cli.app, ["book-preset"], input="1\nA123456789\n0912345678\n\ny\nn\n")
     assert declined.exit_code == 1 and not path.exists()
     assert "A123456789" not in declined.output
-    invalid = runner.invoke(cli.app, ["book-preset"], input="護照\nAB123456\n0912345678\n\ny\n")
+    invalid = runner.invoke(cli.app, ["book-preset"], input="2\nAB123456\n0912345678\n\ny\n")
     assert invalid.exit_code == 2 and not path.exists()
     assert "AB123456" not in invalid.output and "national ID" in invalid.output
 
@@ -224,11 +225,12 @@ def test_book_uses_preset_without_asking_for_it(monkeypatch, tmp_path):
     factory.return_value = manager
     result = runner.invoke(
         cli.app, ["book", "--from", "台北", "--to", "台中", "--date", "2026-09-15", "--after", "17:00"],
-        input="human\n0149\n",
+        input="human\n1\n",
     )
     assert result.exit_code == 0, result.output
     assert "Document number" not in result.output and "A123456789" not in result.output
-    assert "AB12CD34" in result.output and "Train number" in result.output
+    assert "AB12CD34" in result.output and "list number" in result.output
+    manager.select_train.assert_called_once_with("session", "0149")
     manager.submit_captcha.assert_called_once_with("session", "human", retain_on_success=True)
     manager.submit_reservation.assert_called_once_with("session", pickup)
     factory.assert_called_once_with(headless=False, chrome=False, compatibility=False, ttl=cli.BOOKING_TTL)
@@ -265,7 +267,7 @@ def test_book_steps_one_page_and_selects_only_that_page(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "BookingSessionManager", Mock(return_value=manager))
     result = runner.invoke(
         cli.app, ["book", "--from", "台北", "--to", "台中", "--date", "2026-09-15", "--after", "17:00"],
-        input="human\nl\n0803\n",
+        input="human\nl\n1\n",
     )
     assert result.exit_code == 0, result.output
     assert "Return to the page that lists a train" in result.output
@@ -273,6 +275,14 @@ def test_book_steps_one_page_and_selects_only_that_page(monkeypatch, tmp_path):
     manager.load_later_trains.assert_not_called()
     manager.step_trains.assert_called_once_with("session", "later")
     manager.select_train.assert_called_once_with("session", "0803")
+
+
+def test_list_number_rejects_a_train_number():
+    trains = [Train(number="0149", departure="17:31", arrival="18:18")]
+    assert cli._train_number_for_choice(trains, "1") == "0149"
+    with pytest.raises(typer.Exit) as exc:
+        cli._train_number_for_choice(trains, "0149")
+    assert exc.value.exit_code == 2
 
 
 def test_book_reports_uncertain_without_another_prompt(monkeypatch, tmp_path):
@@ -304,7 +314,7 @@ def test_book_reports_uncertain_without_another_prompt(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "BookingSessionManager", Mock(return_value=manager))
     result = runner.invoke(
         cli.app, ["book", "--from", "台北", "--to", "台中", "--date", "2026-09-15", "--after", "17:00"],
-        input="human\n0149\n",
+        input="human\n1\n",
     )
     assert result.exit_code == 1
     assert "UNCERTAIN" in result.output and "will not submit again" in result.output
