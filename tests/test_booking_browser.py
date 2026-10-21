@@ -871,6 +871,43 @@ def test_reservation_outcome_keeps_personal_text_out_of_the_result():
     assert secret not in listed.message
 
 
+@pytest.mark.parametrize("field", ["取票人護照 P1234567", "乘車日期 20261022"])
+@pytest.mark.parametrize("rejection", ["", "訂位失敗\n", "無法完成訂位\n"])
+def test_reservation_outcome_does_not_scan_into_other_fields(field, rejection):
+    from thsr_watcher.booking_models import ReservationStatus
+
+    result = adapter.reservation_outcome(f"訂位代號：\n{rejection}{field}")
+    if rejection:
+        assert result.status == ReservationStatus.REJECTED
+        assert result.reservation_code is None
+        assert field not in result.message
+    else:
+        assert result is None
+
+
+@pytest.mark.parametrize("text", [
+    "訂位代號： AB12CD34",
+    "訂位代號\nAB12CD34",
+    "訂位代號：\n12345678",
+    "序號\t交易狀態\t訂位代號\n1\t未付款\tAB12CD34",
+])
+def test_reservation_outcome_reads_only_the_code_value(text):
+    from thsr_watcher.booking_models import ReservationStatus
+
+    result = adapter.reservation_outcome(text)
+    assert result.status == ReservationStatus.CONFIRMED
+    assert result.reservation_code in {"AB12CD34", "12345678"}
+
+
+def test_reservation_outcome_with_code_and_rejection_is_uncertain():
+    from thsr_watcher.booking_models import ReservationStatus
+
+    result = adapter.reservation_outcome("訂位代號 AB12CD34\n訂位失敗")
+    assert result.status == ReservationStatus.UNCERTAIN
+    assert result.reservation_code is None
+    assert "AB12CD34" not in result.message
+
+
 def test_membership_checkbox_and_single_reservation_click():
     from thsr_watcher.booking_models import DocumentType, PickupDetails, ReservationStatus
 

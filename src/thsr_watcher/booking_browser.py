@@ -200,16 +200,31 @@ def _request_description(request) -> str:
 def reservation_outcome(text: str) -> ReservationResult | None:
     """Classify a reservation page without copying its text into the result."""
     codes = set()
-    start = 0
-    while True:
-        at = text.find(RESERVATION_LABEL, start)
-        if at < 0:
-            break
-        window = text[at + len(RESERVATION_LABEL):at + len(RESERVATION_LABEL) + 80]
-        found = RESERVATION_CODE.search(window)
-        if found:
-            codes.add(found.group(1).upper())
-        start = at + len(RESERVATION_LABEL)
+    # A label/value pair must be adjacent. Never search across intervening
+    # fields: their dates or document numbers can also look like an 8-digit code.
+    for found in re.finditer(
+        re.escape(RESERVATION_LABEL) + r"\s*[:：]?\s*" + RESERVATION_CODE.pattern,
+        text,
+    ):
+        codes.add(found.group(1).upper())
+    # inner_text() preserves table cells as tabs. Read the code from the same
+    # column in the immediately following row, rather than scanning nearby text.
+    lines = text.splitlines()
+    for header, row in zip(lines, lines[1:]):
+        headings = [cell.strip() for cell in header.split("\t")]
+        cells = [cell.strip() for cell in row.split("\t")]
+        if len(headings) < 2 or headings.count(RESERVATION_LABEL) != 1 or len(cells) != len(headings):
+            continue
+        candidate = cells[headings.index(RESERVATION_LABEL)]
+        if RESERVATION_CODE.fullmatch(candidate):
+            codes.add(candidate.upper())
+    if RESERVATION_REJECTION.search(text):
+        if codes:
+            return _uncertain()
+        return ReservationResult(
+            status=ReservationStatus.REJECTED,
+            message="THSR rejected the reservation. No payment was made.",
+        )
     if len(codes) == 1:
         return ReservationResult(
             status=ReservationStatus.CONFIRMED, reservation_code=codes.pop(),
@@ -217,11 +232,6 @@ def reservation_outcome(text: str) -> ReservationResult | None:
         )
     if len(codes) > 1:
         return ReservationResult(status=ReservationStatus.UNCERTAIN, message=UNCERTAIN_MESSAGE)
-    if RESERVATION_REJECTION.search(text):
-        return ReservationResult(
-            status=ReservationStatus.REJECTED,
-            message="THSR rejected the reservation. No payment was made.",
-        )
     return None
 
 
