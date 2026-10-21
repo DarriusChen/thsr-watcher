@@ -697,11 +697,22 @@ class PlaywrightBookingBrowser:
             if page_trains is None:
                 self._listed = []
                 return []
+            pager = found.get("pager") or {}
+            if pager.get("kind") != "unknown" and not pager.get("hasNext"):
+                refreshed = self._refresh_later_page()
+                # A refresh is a new snapshot of the whole current page. Use
+                # its trains and pager together before recording any results.
+                self._reject_result_page_errors()
+                if refreshed is not None:
+                    page_trains = self._parse_visible_trains(refreshed, empty_result)
+                    if page_trains is None:
+                        self._listed = []
+                        return []
+                    pager = refreshed.get("pager") or {}
             signature = "|".join(sorted(train.number for train in page_trains))
             if signature in seen_codes:
                 raise BookingError("Result page did not change; availability is unknown")
             seen_codes.append(signature)
-            pager = found.get("pager") or {}
             page_index = page_offset + len(seen_codes) - 1
             if pager.get("kind") == "later":
                 self._result_nav = "later"
@@ -716,13 +727,6 @@ class PlaywrightBookingBrowser:
                     self._train_page[train.number] = label
             if pager.get("kind") == "unknown":
                 return self._record_unrecognized_pager(pager, collected, follow=follow)
-            if not pager.get("hasNext"):
-                refreshed = self._refresh_later_page()
-                refreshed_pager = (refreshed or {}).get("pager") or {}
-                if refreshed_pager.get("hasNext"):
-                    pager = refreshed_pager
-                elif refreshed_pager.get("kind") == "unknown":
-                    return self._record_unrecognized_pager(refreshed_pager, collected, follow=follow)
             self._remember_page(pager, collected, more=bool(pager.get("hasNext")))
             if not follow or not pager.get("hasNext"):
                 return collected

@@ -431,6 +431,27 @@ def test_later_train_button_is_followed_in_the_same_search(browser_setup):
     assert retained.browser._result_page_index == 1
 
 
+def test_access_error_during_result_refresh_does_not_return_stale_success(browser_setup, monkeypatch):
+    _, _, _, page, _, request = browser_setup
+    page.wait_for_function.return_value.json_value.return_value = {
+        "trains": [{"code": "0149", "departure": "17:31", "arrival": "18:18", "label": ""}],
+        "pager": {"kind": "later", "hasNext": False},
+    }
+
+    def refresh(browser):
+        browser._request_errors.append("HTTP 403")
+        return None
+
+    monkeypatch.setattr(adapter.PlaywrightBookingBrowser, "_refresh_later_page", refresh)
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        result = manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        assert result.status == Status.UNKNOWN_ERROR
+        assert result.trains == []
+        assert "HTTP 403" in result.message
+        assert not started.captcha_path.exists()
+
+
 def test_step_result_page_replaces_the_list_with_one_page(browser_setup):
     _, _, _, page, _, request = browser_setup
     pages = [
