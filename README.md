@@ -114,7 +114,9 @@ options as `booking-search`, including `--compatibility`. After you answer the
 CAPTCHA, it shows one page of bookable trains, numbered from 1. Enter that list
 number to select a train. Enter `e` or `l` to move one page earlier or later
 when that control is present; the list is replaced by that page and numbered
-again from 1. Only trains on the current page can be selected. Return to the
+again from 1. The initial list respects `--after`; after explicit page navigation,
+all trains on that page are shown, including departures before `--after`.
+Only trains on the current page can be selected. Return to the
 page that lists a train before choosing its list number. Entering the train
 number does not select it. The command
 fills the preset and submits once. It does not ask for the document, mobile,

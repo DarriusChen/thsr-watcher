@@ -478,6 +478,50 @@ def test_step_result_page_replaces_the_list_with_one_page(browser_setup):
     assert len(pages) == 1
 
 
+@pytest.mark.parametrize("direction", ["earlier", "later"])
+@pytest.mark.parametrize("include_overlap", [True, False])
+def test_explicit_page_navigation_keeps_trains_before_initial_after(browser_setup, direction, include_overlap):
+    _, _, _, page, locators, request = browser_setup
+    request = BookingSearchRequest.model_validate(request.model_dump() | {"after": "14:00"})
+    locators['[name="toTimeTable"]'].locator.return_value.evaluate_all.return_value = [
+        {"text": "14:00", "value": "1400"},
+    ]
+
+    def scan(trains):
+        return {
+            "trains": [
+                {"code": number, "departure": departure, "arrival": "18:00", "label": ""}
+                for number, departure in trains
+            ],
+            "pager": {"kind": "later", "hasNext": True, "hasEarlier": True},
+        }
+
+    page.wait_for_function.return_value.json_value.return_value = scan([
+        ("829", "13:19"), ("833", "14:19"),
+    ])
+    with BookingSessionManager() as manager:
+        started = manager.start_search(request)
+        initial = manager.submit_captcha(started.session_id, "answer", retain_on_success=True)
+        assert [train.number for train in initial.trains] == ["833"]
+        browser = manager._sessions[started.session_id].browser
+        adjacent_trains = [("825", "12:19"), ("829", "13:19")]
+        if include_overlap:
+            adjacent_trains.append(("833", "14:19"))
+        adjacent = scan(adjacent_trains)
+        browser._read_earlier_result_page = Mock(return_value=adjacent)
+        browser._read_next_result_page = Mock(return_value=adjacent)
+        browser.select_train = Mock()
+        stepped = manager.step_trains(started.session_id, direction)
+        assert stepped.status == Status.SUCCESS
+        assert [train.number for train in stepped.trains] == [number for number, _ in adjacent_trains]
+        browser.select_train.assert_not_called()
+        selected = manager.select_train(started.session_id, "825")
+        assert isinstance(selected, adapter.Train)
+        assert selected.number == "825"
+        browser.select_train.assert_called_once_with("825")
+    locators["#SubmitButton"].click.assert_called_once_with(no_wait_after=True)
+
+
 @pytest.mark.parametrize("action", ["step", "load"])
 @pytest.mark.parametrize("surface", ["panel", "body"])
 def test_paged_timeout_is_not_reported_as_bookable(browser_setup, action, surface):

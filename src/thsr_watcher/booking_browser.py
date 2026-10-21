@@ -764,7 +764,9 @@ class PlaywrightBookingBrowser:
         else:
             found = self._read_earlier_result_page(signature)
         trains = self._collect_result_pages(found, empty_result=None, follow=False)
-        return self._bookable_trains(trains)
+        # Explicit page navigation explores all choices on the current page,
+        # including departures before the initial search time.
+        return self._bookable_trains(trains, apply_after=False)
 
     def load_later_trains(self) -> BookingSearchResult:
         """Read the remaining result pages after the user asks for them."""
@@ -782,11 +784,11 @@ class PlaywrightBookingBrowser:
             trains = self._collect_result_pages(found, empty_result=None, follow=True)
         return self._bookable_trains(trains)
 
-    def _bookable_trains(self, trains: list[Train]) -> BookingSearchResult:
+    def _bookable_trains(self, trains: list[Train], *, apply_after: bool = True) -> BookingSearchResult:
         assert self._request is not None
         return BookingSearchResult(
             status=Status.SUCCESS,
-            trains=[train for train in trains if train.departure >= self._request.after],
+            trains=[train for train in trains if not apply_after or train.departure >= self._request.after],
             message="Currently presented as bookable in this search; no reservation has been created.",
         )
 
