@@ -61,11 +61,15 @@ _SCAN_JS = """
     const hasPattern = new RegExp(patterns, 'i').test((document.body && document.body.innerText) || '');
     if (!trains.length && !hasTableRadio && !hasFeedback && !hasPattern) return null;
     const controlText = el => ((el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '')).replace(/\\s+/g, ' ').trim();
-    const enabled = el => !el.disabled && el.getAttribute('aria-disabled') !== 'true' && !el.closest('.uk-disabled, [aria-disabled="true"]');
+    const enabled = el => !el.matches(':disabled') && el.getAttribute('aria-disabled') !== 'true' && !el.closest('.uk-disabled, [aria-disabled="true"]');
     const labeled = (word) => {
+        // Keep disabled matches until containers have been removed. Otherwise
+        // a wrapper around a disabled button can become the clickable target.
         const nodes = Array.from(document.querySelectorAll('a, button, input, [role="button"], [role="link"], [class*="button"], [class*="btn"], span, div'))
-            .filter(el => visible(el) && enabled(el) && controlText(el).includes(word) && controlText(el).length <= 40);
-        return nodes.filter(el => !nodes.some(other => other !== el && el.contains(other)));
+            .filter(el => visible(el) && controlText(el).includes(word) && controlText(el).length <= 40);
+        const targets = nodes.filter(el => !nodes.some(other => other !== el && el.contains(other)))
+            .map(el => el.closest('a, button, [role="button"], [role="link"]') || el);
+        return Array.from(new Set(targets)).filter(enabled);
     };
     const markLabeled = (name, nodes) => {
         document.querySelectorAll('[data-thsr-watcher-' + name + ']').forEach(node => node.removeAttribute('data-thsr-watcher-' + name));
@@ -75,10 +79,10 @@ _SCAN_JS = """
     };
     const later = labeled('更晚車次');
     const earlier = labeled('更早車次');
+    markLabeled('later', later);
     markLabeled('earlier', earlier);
     let pager = {kind: 'none', hasNext: false, active: ''};
     if (later.length === 1) {
-        markLabeled('later', later);
         pager = {kind: 'later', hasNext: true, active: ''};
     } else if (later.length > 1) {
         pager = {kind: 'unknown', hasNext: false, active: ''};

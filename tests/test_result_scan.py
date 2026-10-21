@@ -38,10 +38,34 @@ def scan_page():
     '<button aria-disabled="true">更晚車次</button>',
     '<div class="uk-disabled"><button>更晚車次</button></div>',
     '<input type="button" disabled value="更晚車次">',
+    '<div><button disabled>更晚車次</button></div>',
+    '<div><button disabled><span>更晚車次</span></button></div>',
+    '<div><button aria-disabled="true"><span>更晚車次</span></button></div>',
+    '<div><input type="button" disabled value="更晚車次"></div>',
+    '<fieldset disabled><div><button>更晚車次</button></div></fieldset>',
 ])
 def test_disabled_later_train_control_has_no_next_page(scan_page, html):
     assert scan(scan_page, RADIO + html)["kind"] == "later"
     assert scan(scan_page, RADIO + html)["hasNext"] is False
+    assert scan_page.locator('[data-thsr-watcher-later]').count() == 0
+
+
+@pytest.mark.parametrize("word,attribute", [
+    ("更晚車次", "later"), ("更早車次", "earlier"),
+])
+def test_nested_control_uses_button_state_and_clears_stale_marker(scan_page, word, attribute):
+    pager = scan(scan_page, RADIO + f'<div><button><span>{word}</span></button></div>')
+    flag = "hasNext" if attribute == "later" else "hasEarlier"
+    assert pager[flag] is True
+    marked = scan_page.locator(f'[data-thsr-watcher-{attribute}]')
+    assert marked.evaluate('(el) => el.tagName') == "BUTTON"
+    scan_page.locator('button').evaluate('(el) => el.disabled = true')
+    found = scan_page.evaluate(_SCAN_JS, {
+        "table": RESULT_TABLE, "radio": TRAIN_RADIO, "feedback": FEEDBACK,
+        "patterns": "nomatch", "staleOrigin": None, "staleCodes": None,
+    })
+    assert found["pager"][flag] is False
+    assert marked.count() == 0
 
 
 def test_enabled_later_train_control_has_a_next_page(scan_page):
