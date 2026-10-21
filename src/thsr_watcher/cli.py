@@ -173,11 +173,13 @@ def _page_prompt(earlier: bool, later: bool) -> str:
 def _train_number_for_choice(trains, choice: str) -> str:
     """Map a 1-based list number on the current page to that train's number."""
     if choice.isdigit():
-        index = int(choice)
+        try:
+            index = int(choice)
+        except ValueError:
+            index = 0
         if 1 <= index <= len(trains):
             return trains[index - 1].number
-    typer.echo("Enter a list number.", err=True)
-    raise typer.Exit(2)
+    raise ValueError("Enter a list number.")
 
 
 def _choose_current_page(manager: BookingSessionManager, session_id: str, result):
@@ -194,13 +196,16 @@ def _choose_current_page(manager: BookingSessionManager, session_id: str, result
         if choice.lower() in {"e", "l"}:
             if (choice.lower() == "e" and not earlier) or (choice.lower() == "l" and not later):
                 typer.echo("That result page is not available.", err=True)
-                raise typer.Exit(2)
+                continue
             result = manager.step_trains(session_id, "earlier" if choice.lower() == "e" else "later")
             if result.status != BookingSearchStatus.SUCCESS:
                 typer.echo(f"{result.status.value}: {result.message}")
                 raise typer.Exit(1)
             continue
-        return _train_number_for_choice(result.trains, choice)
+        try:
+            return _train_number_for_choice(result.trains, choice)
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
 
 
 def _maybe_list_later_trains(manager: BookingSessionManager, session_id: str, result):

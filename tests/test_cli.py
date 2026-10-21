@@ -225,12 +225,16 @@ def test_book_uses_preset_without_asking_for_it(monkeypatch, tmp_path):
     factory.return_value = manager
     result = runner.invoke(
         cli.app, ["book", "--from", "台北", "--to", "台中", "--date", "2026-09-15", "--after", "17:00"],
-        input="human\n1\n",
+        input="human\nl\nwrong\n0\n1\n",
     )
     assert result.exit_code == 0, result.output
+    assert "That result page is not available." in result.output
+    assert "Enter a list number." in result.output
     assert "Document number" not in result.output and "A123456789" not in result.output
     assert "AB12CD34" in result.output and "list number" in result.output
     manager.select_train.assert_called_once_with("session", "0149")
+    manager.start_search.assert_called_once()
+    manager.step_trains.assert_not_called()
     manager.submit_captcha.assert_called_once_with("session", "human", retain_on_success=True)
     manager.submit_reservation.assert_called_once_with("session", pickup)
     factory.assert_called_once_with(headless=False, chrome=False, compatibility=False, ttl=cli.BOOKING_TTL)
@@ -280,9 +284,50 @@ def test_book_steps_one_page_and_selects_only_that_page(monkeypatch, tmp_path):
 def test_list_number_rejects_a_train_number():
     trains = [Train(number="0149", departure="17:31", arrival="18:18")]
     assert cli._train_number_for_choice(trains, "1") == "0149"
-    with pytest.raises(typer.Exit) as exc:
+    with pytest.raises(ValueError, match="Enter a list number"):
         cli._train_number_for_choice(trains, "0149")
-    assert exc.value.exit_code == 2
+
+
+@pytest.mark.parametrize("invalid", ["e", "l", "wrong", "0149", "0", "2", "²"])
+def test_choose_current_page_reprompts_after_invalid_input(monkeypatch, capsys, invalid):
+    from thsr_watcher.booking_models import BookingSearchResult, BookingSearchStatus
+
+    train = Train(number="0149", departure="17:31", arrival="18:18")
+    result = BookingSearchResult(status=BookingSearchStatus.SUCCESS, trains=[train])
+    manager = Mock()
+    manager.has_earlier_trains.return_value = False
+    manager.can_step_later.return_value = False
+    prompt = Mock(side_effect=[invalid, "1"])
+    monkeypatch.setattr(cli.typer, "prompt", prompt)
+    assert cli._choose_current_page(manager, "session", result) == "0149"
+    assert prompt.call_count == 2
+    expected = "That result page is not available." if invalid in {"e", "l"} else "Enter a list number."
+    assert expected in capsys.readouterr().err
+    manager.step_trains.assert_not_called()
+    manager.start_search.assert_not_called()
+    manager.submit_captcha.assert_not_called()
+
+
+def test_choose_current_page_still_stops_on_navigation_failure(monkeypatch):
+    from thsr_watcher.booking_models import BookingSearchResult, BookingSearchStatus
+
+    result = BookingSearchResult(
+        status=BookingSearchStatus.SUCCESS,
+        trains=[Train(number="0149", departure="17:31", arrival="18:18")],
+    )
+    manager = Mock()
+    manager.has_earlier_trains.return_value = True
+    manager.can_step_later.return_value = False
+    manager.step_trains.return_value = BookingSearchResult(
+        status=BookingSearchStatus.UNKNOWN_ERROR, message="HTTP 403; stopped without retry",
+    )
+    prompt = Mock(return_value="e")
+    monkeypatch.setattr(cli.typer, "prompt", prompt)
+    with pytest.raises(typer.Exit) as exc:
+        cli._choose_current_page(manager, "session", result)
+    assert exc.value.exit_code == 1
+    prompt.assert_called_once()
+    manager.step_trains.assert_called_once_with("session", "earlier")
 
 
 def test_book_reports_uncertain_without_another_prompt(monkeypatch, tmp_path):

@@ -118,7 +118,8 @@ again from 1. The initial list respects `--after`; after explicit page navigatio
 all trains on that page are shown, including departures before `--after`.
 Only trains on the current page can be selected. Return to the
 page that lists a train before choosing its list number. Entering the train
-number does not select it. The command
+number does not select it. Invalid list numbers or unavailable page directions
+show an error and prompt again in the same session. The command
 fills the preset and submits once. It does not ask for the document, mobile,
 membership choice, or a second confirmation. It never clicks payment.
 
